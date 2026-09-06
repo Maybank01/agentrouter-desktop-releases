@@ -5,6 +5,9 @@ AgentRouter 桌面客户端：登录 AgentRouter 或绑定 API 密钥，选择�
 
 ## 下载与安装
 
+**[下载 Windows x64 内测版 0.1.0-beta.1](https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v0.1.0-beta.1/AgentRouter-0.1.0-beta.1-x64-Setup.exe)**
+｜[版本说明与校验文件](https://github.com/Maybank01/agentrouter-desktop-releases/releases/tag/v0.1.0-beta.1)
+
 前往 [Releases 下载页面](https://github.com/Maybank01/agentrouter-desktop-releases/releases)，
 选择 Windows x64 版本中的 `AgentRouter-<版本>-x64-Setup.exe`。
 当前仅提供 Beta 内测版，不提供 macOS、Linux 或 Windows ARM64 专用安装包。
