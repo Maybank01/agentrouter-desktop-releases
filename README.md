@@ -5,8 +5,11 @@ AgentRouter 桌面客户端：登录 AgentRouter 或绑定 API 密钥，选择�
 
 ## 下载与安装
 
-**[下载 Windows x64 内测版 0.1.0-beta.1](https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v0.1.0-beta.1/AgentRouter-0.1.0-beta.1-x64-Setup.exe)**
-｜[版本说明与校验文件](https://github.com/Maybank01/agentrouter-desktop-releases/releases/tag/v0.1.0-beta.1)
+**[下载 Windows x64 内测版 0.1.0-beta.2](https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v0.1.0-beta.2/AgentRouter-0.1.0-beta.2-x64-Setup.exe)**
+｜[版本说明与校验文件](https://github.com/Maybank01/agentrouter-desktop-releases/releases/tag/v0.1.0-beta.2)
+
+本版连接 **V3 测试站**，未切换正式站。AI 请求需要 V3 账号具备对应模型权限
+和可用额度；客户端持续更新与正式站切换分别进行。
 
 前往 [Releases 下载页面](https://github.com/Maybank01/agentrouter-desktop-releases/releases)，
 选择 Windows x64 版本中的 `AgentRouter-<版本>-x64-Setup.exe`。
@@ -17,7 +20,7 @@ Beta **尚未进行代码签名**，Windows 可能显示未知发布者或安全
 不要关闭系统安全防护来安装。
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\AgentRouter-0.1.0-beta.1-x64-Setup.exe'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\AgentRouter-0.1.0-beta.2-x64-Setup.exe'
 ```
 
 ## 数据与更新
@@ -26,6 +29,8 @@ Get-FileHash -Algorithm SHA256 -LiteralPath '.\AgentRouter-0.1.0-beta.1-x64-Setu
   不自动导入或修改个人 `.codex` 配置、登录信息和 Skills。
 - 登录凭据经 Windows 系统加密后保存；本版本不提供额外的 Skills 管理。
 - 客户端只检查本仓库的更新，下载和退出安装均需用户确认。
+- 无需登录即可检查更新；beta.2 的登录引导支持关闭、Escape 和“稍后登录”。
+  beta.1 若被登录弹窗挡住，可从系统托盘菜单选择“检查 AgentRouter 更新”。
 - 本仓库是独立的新下载通道，不迁移或覆盖旧 AgentRouter for DSH 下载通道。
 
 ## 关于本仓库
