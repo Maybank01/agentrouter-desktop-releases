@@ -5,14 +5,17 @@ AgentRouter 桌面客户端：登录 AgentRouter 或绑定 API 密钥，选择�
 
 ## 下载与安装
 
-**[下载 Windows x64 内测版 0.1.0-beta.4](https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v0.1.0-beta.4/AgentRouter-0.1.0-beta.4-x64-Setup.exe)**
-｜[版本说明与校验文件](https://github.com/Maybank01/agentrouter-desktop-releases/releases/tag/v0.1.0-beta.4)
+**[下载 Windows x64 内测版 0.1.0-beta.5](https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v0.1.0-beta.5/AgentRouter-0.1.0-beta.5-x64-Setup.exe)**
+｜[版本说明与校验文件](https://github.com/Maybank01/agentrouter-desktop-releases/releases/tag/v0.1.0-beta.5)
 
-安装包约 **265 MB**。beta.4 增加按需组件更新，修复安装器差分缓存，并移除
-不适用于 Windows x64 的 Codex 文件；本次不升级 Codex、DSH 或 Electron。
-继续支持关闭登录引导、稍后登录、未登录更新和升级后保留初始化状态。
+安装包约 **265 MB**。beta.5 把更新提示改成客户端内的独立界面插件，可显示
+下载进度、关闭面板后后台下载、稍后重启。新版发起安装时使用静默覆盖，
+保留原目录和安装范围，并请求安装后自动打开客户端；AI 执行期间禁止重启更新。
+本次不升级 Codex、DSH 或 Electron，继续支持未登录更新和按需组件下载。
+**从旧版升级到 beta.5 时，仍可能最后显示一次旧提示和安装向导。**
+新流程从 beta.5 生效，无须为更新额外登录或填写 API 密钥。
 beta.2 已撤回并保留原资产，不覆盖已有版本。
-如果已经安装 beta.2 且卡在上游向导，请关闭客户端后使用 beta.4 安装器覆盖安装，
+如果已经安装 beta.2 且卡在上游向导，请关闭客户端后使用 beta.5 安装器覆盖安装，
 不要为此填写 DeepSeek 密钥，也不需要删除个人数据。
 
 当前连接 **V3 测试站**，尚未切换正式站；AI 请求需要该站账户有对应模型权限
@@ -27,7 +30,7 @@ Beta **尚未进行代码签名**，Windows 可能显示未知发布者或安全
 不要关闭系统安全防护来安装。
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath '.\AgentRouter-0.1.0-beta.4-x64-Setup.exe'
+Get-FileHash -Algorithm SHA256 -LiteralPath '.\AgentRouter-0.1.0-beta.5-x64-Setup.exe'
 ```
 
 ## 数据与更新
@@ -36,6 +39,8 @@ Get-FileHash -Algorithm SHA256 -LiteralPath '.\AgentRouter-0.1.0-beta.4-x64-Setu
   不自动导入或修改个人 `.codex` 配置、登录信息和 Skills。
 - 登录凭据经 Windows 系统加密后保存；本版本不提供额外的 Skills 管理。
 - 客户端只检查本仓库的更新，下载和退出安装均需用户确认。
+- beta.5 的更新界面可作为组件单独更新；新增组件 ABI 2 使用独立入口，
+  保留 beta.4 的 ABI 1 入口，不向旧客户端发送不兼容清单。
 - 从 beta.4 开始，插件只下载改变的插件包，Codex 只下载相应原生内核包，
   不连带更新 Electron 或其他未变化组件；重启生效，启动失败可回退。
 - 客户端壳变化时使用安装包更新并尝试差分下载。首次升级到 beta.4 仍可能
@@ -57,5 +62,8 @@ beta.3 → beta.4 的真实未登录更新、安装、重启和 Profile 保留�
 独立组件 CI 已在公开安装包上通过原生 Codex 和桌面检查；首次组件清单与
 安装包内置版本一致，不会要求已安装 beta.4 的用户重复下载相同内容。
 自动验收对安装器使用静默模式，由测试驱动重启；AI 检查使用本地测试网关。
+beta.5 已通过干净构建、真实桌面隐藏窗口测试，以及当前用户／所有用户安装的
+真实静默覆盖、目录和安装范围保留验收。更新提示未使用原生消息弹窗。
+可见窗口的真实自动重启仍是单独的待执行验收，不与安装参数检查混为一谈。
 不代表全部模型、真实账户 AI 回复、人工安装界面或所有 Windows 策略均已验证。
 反馈问题时请附版本号和复现步骤，**不要上传 API 密钥、登录凭据或个人配置**。
