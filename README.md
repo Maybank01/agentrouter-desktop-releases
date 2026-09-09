@@ -1,9 +1,28 @@
 # AgentRouter Desktop 下载
 
-> 2026-09-08 仓库整理说明：本仓库继续只承载下载说明和二进制资产。
-> 下一条客户端构建线是“原版 DSH Desktop + 预装公开 npm 插件”，功能更新由
-> 通用 DSH 插件提供。该预装候选尚未公开发布，**当前下载仍是下述 beta.5**；
-> 不代表旧版已经迁移，也没有切换现有安装器或组件更新源。
+## 当前版本：2.0.5-preinstalled.1
+
+**[下载 Windows x64 安装包](https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v2.0.5-preinstalled.1/DSH-Desktop-2.0.5-x64-Setup.exe)**
+｜[发布说明、校验文件与许可](https://github.com/Maybank01/agentrouter-desktop-releases/releases/tag/v2.0.5-preinstalled.1)
+
+原版 DSH Desktop 2.0.5 + 预装 AgentRouter、Codex 内核和图片查看器插件，安装包 273.2 MiB。
+应用名称保持 **DSH Desktop**；AgentRouter 功能与 Codex 适配通过 npm 插件更新。
+主插件为 `@agentrouter-top/dsh-codex@0.1.0-beta.15`，Relay 为 `0.2.2-agentrouter.8`，图片查看器为 `0.1.0-beta.11`。
+
+本版是**未签名的公开测试版**，Windows 可能显示未知发布者提示。不要关闭系统安全防护。
+安装后完成或跳过上游设置，按预装插件提示重启一次，再使用 AgentRouter 授权登录或 API Key。
+旧 AgentRouter 客户端的数据不自动迁移，旧更新通道不变；已有 DSH Desktop 用户可直接安装我们的插件。
+插件仍使用 v3-candidate 认证环境，本次发布不切换 API 网关。
+
+SHA-256：`1c7a378a6886dfe716f772d1878ddad854854347a18341d675618ac7686b073c`
+
+本仓库只承载下载说明和二进制资产。详细测试范围与限制见当前发布说明。
+
+---
+
+## 历史版本 beta.5（以下仅适用于旧客户端）
+
+旧安装包、组件资产和说明保留，不代表新预装版使用旧架构。
 
 AgentRouter 桌面客户端：登录 AgentRouter 或绑定 API 密钥，选择模型后使用 AI。
 安装包内置 Codex 执行环境，无须另外安装 Node.js 或 Codex。
