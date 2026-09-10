@@ -47,9 +47,12 @@ test('fresh-package exceptions are exact, preserve upstream settings and never d
 
 test('builder retains upstream preflight and records unaccepted lifecycle gates honestly', () => {
   const source = readFileSync(join(root, 'assembly/build.mjs'), 'utf8')
+  const helpers = readFileSync(join(root, 'assembly/lib.mjs'), 'utf8')
   assert.match(source, /'dist:win'/)
   assert.doesNotMatch(source, /DSH_PACKAGE_CHECK_ALREADY_RAN|desktop-product\/main|components-release|\.\.\/packages\//)
   assert.match(source, /freshInstalledPreinstall: false/)
   assert.match(source, /pluginUpdateAndRemoval: false/)
   assert.match(source, /publicPromotionEligible: false/)
+  assert.match(helpers, /AGENTROUTER_COREPACK/)
+  assert.match(helpers, /process\.execPath/)
 })
