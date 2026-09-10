@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 
 export const root = resolve(import.meta.dirname, '..')
 export const readJson = path => JSON.parse(readFileSync(path, 'utf8'))
@@ -78,7 +78,18 @@ export function git(source, ...args) {
   return execFileSync('git', ['-C', source, ...args], { encoding: 'utf8', windowsHide: true, timeout: 120000, maxBuffer: 20_000_000 }).trim()
 }
 export function yarn(source, env, ...args) {
-  run(process.platform === 'win32' ? 'corepack.cmd' : 'corepack', ['yarn', ...args], source, env)
+  const entry = env.AGENTROUTER_COREPACK
+  if (entry) {
+    assert.equal(isAbsolute(entry), true, 'Pinned Corepack entry must be an absolute path')
+    assert.equal(existsSync(entry), true, 'Pinned Corepack entry is missing')
+    run(process.execPath, [entry, 'yarn', ...args], source, env)
+    return
+  }
+  if (process.platform === 'win32') {
+    run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'corepack.cmd', 'yarn', ...args], source, env)
+    return
+  }
+  run('corepack', ['yarn', ...args], source, env)
 }
 
 export function preinstalledManifest(original) {
