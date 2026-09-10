@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "registry": "https://registry.npmjs.org",
+  "packages": [
+    {
+      "name": "@agentrouter-top/dsh-codex",
+      "distTag": "next",
+      "direct": true,
+      "preinstallEntry": "@agentrouter-top/dsh-codex/desktop-preinstall",
+      "preinstallConfig": { "productProfile": true }
+    },
+    {
+      "name": "@agentrouter-top/relay-dsh-plugin-codex",
+      "fromPackage": "@agentrouter-top/dsh-codex",
+      "direct": false
+    },
+    {
+      "name": "dsh-image-viewer",
+      "distTag": "beta",
+      "direct": true
+    }
+  ]
+}

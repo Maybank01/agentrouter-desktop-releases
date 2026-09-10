@@ -1,0 +1,25 @@
+.DS_Store
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+node_modules/
+*.tsbuildinfo
+.build/
+
+dsh-plugin-desktop/dist/
+dsh-plugin-desktop/lib/
+dsh-community-market/lib/
+
+.env.yarn
+
+# AgentRouter source intake: do not commit local data, credentials, or outputs.
+.env
+.env.*
+!.env.example
+packages/*/lib/
+packages/*/dist/
+artifacts/
+*.log
