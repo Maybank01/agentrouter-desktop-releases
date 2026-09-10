@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
-  "releaseSequence": 3,
+  "releaseSequence": 4,
   "sourceRepository": "Maybank01/agentrouter-dsh-plugins",
   "environment": "v3-candidate",
   "packages": [
     {
       "name": "@agentrouter-top/dsh-codex",
-      "version": "0.1.0-beta.18",
+      "version": "0.1.0-beta.19",
       "direct": true,
       "preinstallEntry": "@agentrouter-top/dsh-codex/desktop-preinstall",
       "preinstallConfig": {
         "productProfile": true
       },
-      "bytes": 83152,
-      "sha256": "a104432c8f0b97a693b8611bedd3e8419da5ce791bd81e46dfd1be3738c88362",
-      "integrity": "sha512-k8YH73lvA7KDQt2kmFg28TS5yZyIhYR8IBSbXm8QxtbFgNEpERqkbdRbsBLMgZUbRKF4Abes1lTZK9N5t/9JHQ=="
+      "bytes": 83175,
+      "sha256": "d92687feee25d8fbb191a2201f57f5048e26f587d4542ec933be8219e693bdee",
+      "integrity": "sha512-kWFwu0OvMwUuVPgOPEIdM/1eeeDPn3ufsP5coLppZsY1YziIbXlWsnByPGg9AwvrJgV8MB0tmo0Z4Qu5vuntkQ=="
     },
     {
       "name": "@agentrouter-top/relay-dsh-plugin-codex",

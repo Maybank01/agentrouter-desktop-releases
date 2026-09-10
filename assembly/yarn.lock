@@ -14,9 +14,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@agentrouter-top/dsh-codex@npm:0.1.0-beta.18":
-  version: 0.1.0-beta.18
-  resolution: "@agentrouter-top/dsh-codex@npm:0.1.0-beta.18"
+"@agentrouter-top/dsh-codex@npm:0.1.0-beta.19":
+  version: 0.1.0-beta.19
+  resolution: "@agentrouter-top/dsh-codex@npm:0.1.0-beta.19"
   dependencies:
     "@agentrouter-top/relay-dsh-plugin-codex": "npm:0.2.2-agentrouter.9"
     "@deepseek-ai/cordis-plugin-group": "npm:1.0.2"
@@ -44,7 +44,7 @@ __metadata:
     "@deepseek-ai/dsh-invariants": 0.1.2-rc.1
     "@deepseek-ai/dsh-subprocess": 0.1.2-rc.1
     react: 18.3.1
-  checksum: 10c0/f81bc0babb1f0fe92bd8f2975e80a25fde5cf9ef017b83e6ac824fd6a3fefeb2e5a23de433ea74759741521ce25d3e691d9af42c188dfa2d209a3d11e6526115
+  checksum: 10c0/a4c1fc3c155b31baf0f7f415898be2dd34773e7616c034adcc9a82c283bd0d7eb9a86193d05cb2fd205609dbd2ed771a4707ba8990f1ef6523d37ca9ec9ba0d4
   languageName: node
   linkType: hard
 
@@ -9183,7 +9183,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "dsh-plugin-desktop@workspace:dsh-plugin-desktop"
   dependencies:
-    "@agentrouter-top/dsh-codex": "npm:0.1.0-beta.18"
+    "@agentrouter-top/dsh-codex": "npm:0.1.0-beta.19"
     "@base-ui/react": "npm:^1.7.0"
     "@deepseek-ai/cordis": "npm:4.0.2"
     "@deepseek-ai/cordis-plugin-group": "npm:1.0.2"
