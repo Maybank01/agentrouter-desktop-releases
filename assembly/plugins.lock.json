@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "releaseSequence": 2,
+  "sourceRepository": "Maybank01/agentrouter-dsh-plugins",
+  "sourceCommit": "1384c1454a5b2002af7047315aa715c9e0d3c80e",
+  "publicationEvidence": "packaging/codex-release-authorizations/2026-09-09-codex-beta.16.json",
+  "environment": "v3-candidate",
+  "packages": [
+    {
+      "name": "@agentrouter-top/dsh-codex",
+      "version": "0.1.0-beta.16",
+      "direct": true,
+      "preinstallEntry": "@agentrouter-top/dsh-codex/desktop-preinstall",
+      "preinstallConfig": { "productProfile": true },
+      "bytes": 80083,
+      "sha256": "fbaf3d887eca59d41ce29e189c15585be1ab488ef6e2991cd17475a29bf140ef",
+      "integrity": "sha512-fHAMvd/H6r++463g+Onmr6cta8OseX5wzX4WQegum42A437cA/IupLlOQjvdb+f59dxgIA41ar51UGQmUgU8KQ=="
+    },
+    {
+      "name": "@agentrouter-top/relay-dsh-plugin-codex",
+      "version": "0.2.2-agentrouter.9",
+      "direct": false,
+      "bytes": 661738,
+      "sha256": "1f05f21061058f1512e36d37a2f262d670b7e7620d2482660d12396a86bec98d",
+      "integrity": "sha512-fL6DkNi3hPiZy+nhzd03/a3aTvxs6xNY1Z75cmV9cBbC4bwl0JbnJtzKJTAP5znWvGGxhFg9Zp2FRIt/QkTO1Q=="
+    },
+    {
+      "name": "dsh-image-viewer",
+      "version": "0.1.0-beta.11",
+      "direct": true,
+      "bytes": 33414,
+      "sha256": "4c10d6e21a6a000528429b9b91ac946c472f9d08a669cdec78886e19fffb0d58",
+      "integrity": "sha512-Ea0u5MKSNYvyazirUM8i+o8B4fz9Uv6B+Cl4o39QJFXVe/FT/Dphv1kwzNr6u5mp8Do2GviV0isKuTQ17Z2WiQ=="
+    }
+  ]
+}

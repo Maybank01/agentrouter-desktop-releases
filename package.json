@@ -1,0 +1,17 @@
+{
+  "name": "agentrouter-desktop-releases",
+  "private": true,
+  "description": "Self-contained AgentRouter Desktop release assembly",
+  "license": "MIT",
+  "packageManager": "yarn@4.18.0",
+  "engines": { "node": ">=24.15.0" },
+  "scripts": {
+    "test": "node --test assembly/test/*.test.mjs",
+    "test:bootstrap": "npm test",
+    "check:npm": "node assembly/check-npm-updates.mjs",
+    "check:npm:write": "node assembly/check-npm-updates.mjs --write",
+    "assembly:prepare": "node assembly/prepare.mjs",
+    "assembly:refresh-lock": "node assembly/prepare.mjs --refresh-lock",
+    "build:win": "node assembly/build.mjs"
+  }
+}

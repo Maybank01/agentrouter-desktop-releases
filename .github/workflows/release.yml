@@ -1,0 +1,208 @@
+name: Publish AgentRouter Desktop
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild the currently locked version
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: agentrouter-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Check npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      changed: ${{ steps.npm.outputs.changed }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.15.0
+      - run: npm install --global corepack@0.36.0
+      - run: npm test
+      - name: Resolve and verify the configured npm dist-tags
+        id: npm
+        run: node assembly/check-npm-updates.mjs --write --report "$RUNNER_TEMP/npm-report.json"
+      - name: Refresh the immutable assembly lock
+        if: steps.npm.outputs.changed == 'true'
+        run: npm run assembly:refresh-lock
+      - name: Decide whether a release is needed
+        id: decide
+        env:
+          CHANGED: ${{ steps.npm.outputs.changed }}
+          FORCE: ${{ inputs.force }}
+        shell: bash
+        run: |
+          if [[ "$CHANGED" == 'true' || "$FORCE" == 'true' ]]; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Pass the exact lock to the Windows build
+        if: steps.decide.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-lock
+          path: |
+            assembly/plugins.lock.json
+            assembly/yarn.lock
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Build and publish the formal Windows release
+    needs: probe
+    if: needs.probe.outputs.publish == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: npm-lock
+          path: assembly
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.15.0
+      - run: npm install --global corepack@0.36.0
+      - run: npm test
+      - name: Build the locked upstream with the verified npm packages
+        id: build
+        run: npm run build:win
+      - name: Resolve the single installer
+        id: installer
+        shell: pwsh
+        env:
+          BUILD_DIRECTORY: ${{ steps.build.outputs.directory }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(Get-ChildItem -LiteralPath $env:BUILD_DIRECTORY -File | Where-Object Name -Like '*-Setup.exe')
+          if ($files.Count -ne 1) { throw "Expected one installer, found $($files.Count)" }
+          "path=$($files[0].FullName)" >> $env:GITHUB_OUTPUT
+      - name: Install and smoke-test the exact build
+        shell: pwsh
+        env:
+          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Join-Path $env:RUNNER_TEMP 'agentrouter-desktop-release'
+          if (Test-Path -LiteralPath $installDir) { throw 'Fresh installation directory already exists' }
+          $installed = Start-Process -FilePath $env:INSTALLER_PATH -ArgumentList '/S', '/currentuser', "/D=$installDir" -WindowStyle Hidden -Wait -PassThru
+          if ($installed.ExitCode -ne 0) { throw "Installer failed: $($installed.ExitCode)" }
+          $executable = Join-Path $installDir 'DSH Desktop.exe'
+          if (!(Test-Path -LiteralPath $executable)) { throw 'Installed executable is missing' }
+          npm install --prefix artifacts/desktop-smoke-deps --ignore-scripts --no-audit --no-fund playwright@1.62.1
+          if ($LASTEXITCODE -ne 0) { throw 'Browser driver installation failed' }
+          node assembly/smoke-desktop.mjs "$executable" "$env:GITHUB_WORKSPACE/artifacts/installed-acceptance"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed client startup failed' }
+          $result = Get-Content artifacts/installed-acceptance/native-smoke.json -Raw | ConvertFrom-Json
+          if (!$result.passed) { throw 'Native acceptance did not pass' }
+          $result.installerExecuted = $true
+          $result | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 artifacts/installed-acceptance/installed-smoke.json
+      - name: Create the formal GitHub Release
+        id: publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RECEIPT: ${{ steps.build.outputs.receipt }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          $lock = Get-Content assembly/plugins.lock.json -Raw | ConvertFrom-Json
+          $upstream = Get-Content assembly/upstream.lock.json -Raw | ConvertFrom-Json
+          $version = $upstream.tag.TrimStart('v')
+          $tag = "v$version-preinstalled.$($lock.releaseSequence)"
+          if ($tag -notmatch '^v\d+\.\d+\.\d+-preinstalled\.\d+$') { throw 'Invalid release tag' }
+
+          $candidate = Get-Content -LiteralPath $env:CANDIDATE_RECEIPT -Raw | ConvertFrom-Json
+          $installer = Get-Item -LiteralPath $env:INSTALLER_PATH
+          $expected = @($candidate.assets | Where-Object name -EQ $installer.Name)
+          if ($expected.Count -ne 1) { throw 'Installer is absent from candidate receipt' }
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName).Hash.ToLowerInvariant()
+          if ($installer.Length -ne $expected[0].bytes -or $digest -ne $expected[0].sha256) { throw 'Installer bytes differ from candidate receipt' }
+
+          $releaseDir = Join-Path $env:RUNNER_TEMP 'agentrouter-formal-release'
+          New-Item -ItemType Directory -Path $releaseDir -ErrorAction Stop | Out-Null
+          $checksums = Join-Path $releaseDir 'SHA256SUMS.txt'
+          [IO.File]::WriteAllText($checksums, "$digest  $($installer.Name)`n", [Text.UTF8Encoding]::new($false))
+          $notes = Join-Path $releaseDir 'RELEASE_NOTES.md'
+          $packageLines = ($lock.packages | ForEach-Object { "- ``$($_.name)@$($_.version)``" }) -join "`n"
+          [IO.File]::WriteAllText($notes, "# AgentRouter Desktop $($tag.TrimStart('v'))`n`n正式 Windows x64 Release。安装包暂未签名，Windows 可能显示未知发布者提示。`n`n$packageLines`n`nSHA-256: ``$digest```n", [Text.UTF8Encoding]::new($false))
+          $buildRoot = Split-Path -Parent $env:CANDIDATE_RECEIPT
+          $license = Join-Path $buildRoot 'source/LICENSE'
+          $notices = Join-Path $buildRoot 'source/dsh-plugin-desktop/THIRD_PARTY_NOTICES.md'
+          foreach ($path in @($license, $notices, $env:CANDIDATE_RECEIPT, 'artifacts/installed-acceptance/installed-smoke.json')) {
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing release evidence: $path" }
+          }
+
+          gh release view "$tag" --repo "$repo" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$tag" "$($installer.FullName)" "$checksums" "$env:CANDIDATE_RECEIPT" "$license" "$notices" 'artifacts/installed-acceptance/installed-smoke.json' --repo "$repo" --title "AgentRouter Desktop $($tag.TrimStart('v'))" --notes-file "$notes" --latest
+            if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed' }
+          }
+
+          $encodedTag = [Uri]::EscapeDataString($tag)
+          $release = gh api "repos/$repo/releases/tags/$encodedTag" | ConvertFrom-Json
+          if ($release.draft -or $release.prerelease) { throw 'Release is not formal' }
+          $remote = @($release.assets | Where-Object name -EQ $installer.Name)
+          if ($remote.Count -ne 1 -or $remote[0].size -ne $installer.Length) { throw 'Published installer size mismatch' }
+          if ($remote[0].digest -and $remote[0].digest -ne "sha256:$digest") { throw 'Published installer digest mismatch' }
+          $download = Join-Path $env:RUNNER_TEMP $installer.Name
+          Invoke-WebRequest -Uri $remote[0].browser_download_url -OutFile $download -MaximumRedirection 10
+          if ((Get-Item -LiteralPath $download).Length -ne $installer.Length -or (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant() -ne $digest) {
+            throw 'Anonymous Release download mismatch'
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+      - name: Save the released npm lock
+        if: needs.probe.outputs.changed == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.publish.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'agentrouter-release[bot]'
+          git config user.email 'agentrouter-release[bot]@users.noreply.github.com'
+          git add assembly/plugins.lock.json assembly/yarn.lock
+          git commit -m "chore: lock npm packages for $env:RELEASE_TAG [skip ci]"
+          $env:GIT_CONFIG_COUNT = '1'
+          $env:GIT_CONFIG_KEY_0 = 'http.extraheader'
+          $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: bearer $env:GH_TOKEN"
+          $env:GIT_TERMINAL_PROMPT = '0'
+          git push origin HEAD:main
+      - name: Preserve build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-release-${{ github.run_id }}
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            ${{ steps.installer.outputs.path }}
+            ${{ steps.build.outputs.receipt }}
+            artifacts/installed-acceptance/
