@@ -117,6 +117,17 @@ jobs:
           $files = @(Get-ChildItem -LiteralPath $env:BUILD_DIRECTORY -File | Where-Object Name -Like '*-Setup.exe')
           if ($files.Count -ne 1) { throw "Expected one installer, found $($files.Count)" }
           "path=$($files[0].FullName)" >> $env:GITHUB_OUTPUT
+      - name: Stage build evidence in the workspace
+        shell: pwsh
+        env:
+          CANDIDATE_RECEIPT: ${{ steps.build.outputs.receipt }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidence = Join-Path $env:GITHUB_WORKSPACE 'artifacts/build-evidence'
+          New-Item -ItemType Directory -Path $evidence -ErrorAction Stop | Out-Null
+          Copy-Item -LiteralPath $env:CANDIDATE_RECEIPT -Destination $evidence
+          Copy-Item -LiteralPath $env:INSTALLER_PATH -Destination $evidence
       - name: Install and smoke-test the exact build
         shell: pwsh
         env:
@@ -217,7 +228,4 @@ jobs:
           compression-level: 0
           retention-days: 14
           if-no-files-found: ignore
-          path: |
-            ${{ steps.installer.outputs.path }}
-            ${{ steps.build.outputs.receipt }}
-            artifacts/installed-acceptance/
+          path: artifacts/
