@@ -34,7 +34,12 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.15.0
-      - run: npm install --global corepack@0.36.0
+      - name: Install pinned Corepack in the runner temp directory
+        shell: bash
+        run: |
+          corepack_prefix="$RUNNER_TEMP/corepack"
+          npm install --prefix "$corepack_prefix" --no-audit --no-fund corepack@0.36.0
+          echo "$corepack_prefix/node_modules/.bin" >> "$GITHUB_PATH"
       - run: npm test
       - name: Resolve and verify the configured npm dist-tags
         id: npm
@@ -87,7 +92,13 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.15.0
-      - run: npm install --global corepack@0.36.0
+      - name: Install pinned Corepack in the runner temp directory
+        shell: pwsh
+        run: |
+          $corepackPrefix = Join-Path $env:RUNNER_TEMP 'corepack'
+          npm install --prefix $corepackPrefix --no-audit --no-fund corepack@0.36.0
+          if ($LASTEXITCODE -ne 0) { throw 'Corepack installation failed' }
+          Join-Path $corepackPrefix 'node_modules/.bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - run: npm test
       - name: Build the locked upstream with the verified npm packages
         id: build

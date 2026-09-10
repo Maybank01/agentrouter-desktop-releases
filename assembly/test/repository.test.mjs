@@ -28,6 +28,8 @@ test('one scheduled workflow checks npm and publishes this repository formal rel
   assert.match(release, /schedule:/)
   assert.match(release, /workflow_dispatch:/)
   assert.equal((release.match(/corepack@0\.36\.0/g) ?? []).length, 2)
+  assert.equal((release.match(/npm install --prefix [^\r\n]+ corepack@0\.36\.0/g) ?? []).length, 2)
+  assert.doesNotMatch(release, /npm install --global corepack/)
   assert.match(release, /check-npm-updates\.mjs --write/)
   assert.match(release, /npm run assembly:refresh-lock/)
   assert.match(release, /npm run build:win/)
