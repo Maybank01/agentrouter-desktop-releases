@@ -29,6 +29,23 @@ let browser, accepted = false, lastPage, skippedWizards = 0, wizardWindows = 0, 
 const pageErrors = new Set()
 const observedPages = new WeakSet()
 const observedWizards = new WeakSet()
+const dismissExpectedOnboarding = async page => {
+  const steps = [
+    { title: /^(Internal Testing Notice|内测声明)$/, action: /^(Continue|继续)$/ },
+    { title: /^(Add an API key to get started|添加一个 API Key 开始使用)$/, action: /^(Configure later|稍后配置)$/ },
+    { title: /^(Connect AgentRouter|连接 AgentRouter)$/, action: /^稍后登录(?:，关闭引导)?$/ },
+  ]
+  for (const step of steps) {
+    const dialog = page.getByRole('dialog', { name: step.title }).first()
+    if (!await dialog.isVisible()) continue
+    const action = dialog.getByRole('button', { name: step.action }).first()
+    if (!await action.isVisible()) continue
+    await action.click()
+    await dialog.waitFor({ state: 'detached', timeout: 15000 })
+    return true
+  }
+  return false
+}
 const bounded = async operation => {
   let timer
   try { return await Promise.race([operation, new Promise(resolve => { timer = setTimeout(resolve, 3000) })]) }
@@ -73,12 +90,7 @@ try {
           continue
         }
         if (!/^https?:\/\/127\.0\.0\.1/.test(page.url())) continue
-        if (/内测声明/.test(await page.locator('body').innerText())) {
-          const proceed = page.getByRole('button', { name: /^继续$/ })
-          if (await proceed.isVisible()) await proceed.click()
-        }
-        const later = page.getByRole('button', { name: /^稍后登录(?:，关闭引导)?$/ }).first()
-        if (await later.isVisible()) await later.click()
+        if (await dismissExpectedOnboarding(page)) continue
         const state = await page.evaluate(async () => {
           const get = async path => { const response = await fetch(path); return response.ok ? response.json() : null }
           return { account: await get('/api/agentrouter/v1/status'), updates: await get('/api/agentrouter/v1/updates/status'),
