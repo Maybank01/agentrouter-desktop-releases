@@ -10,11 +10,6 @@
       "preinstallConfig": { "productProfile": true }
     },
     {
-      "name": "@agentrouter-top/relay-dsh-plugin-codex",
-      "fromPackage": "@agentrouter-top/dsh-codex",
-      "direct": false
-    },
-    {
       "name": "dsh-image-viewer",
       "distTag": "beta",
       "direct": true
