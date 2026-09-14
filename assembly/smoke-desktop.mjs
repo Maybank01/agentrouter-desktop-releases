@@ -112,12 +112,15 @@ try {
         assert.ok(manifest.dsh.profile.bundles.includes('@agentrouter-top/dsh-codex'))
         assert.ok(manifest.dsh.profile.bundles.includes('dsh-image-viewer'))
         const patch = await readFile(join(root, 'home/profiles/desktop/cordis.patch.yml'), 'utf8')
-        assert.match(patch, /mode: codex-only/)
+        // The upstream desktop shell owns its carrier mode. The release lane
+        // must not resurrect the retired codex-only overlay; preinstallation
+        // is additive and leaves the upstream compatibility carrier intact.
+        assert.match(patch, /mode: compatibility/)
         await page.getByRole('button', { name: /^(Settings|设置)$/ }).click()
         await page.getByRole('button', { name: /检查更新|Check.*update/i }).first().waitFor({ state: 'visible', timeout: 15000 })
         await page.screenshot({ path: join(evidence, 'installed-settings.png') })
         const result = { passed: true, root, executable, realNativeWindow: true, sameProfileRetained: true, wizardWindows, restartConfirmations,
-          codexOnlyProfile: true, viewerLoaded: true, loggedOutPluginUpdateTarget: true,
+          upstreamCompatibilityProfile: true, viewerLoaded: true, loggedOutPluginUpdateTarget: true,
           visibleCodexConsoles: consoles.length,
           version: state.updates.currentVersion, skippedWizardClicks: skippedWizards, pageErrors: [...pageErrors],
           realAccountUsed: false, installerExecuted: false }
