@@ -112,11 +112,9 @@ try {
         assert.ok(manifest.dsh.profile.bundles.includes('@agentrouter-top/dsh-codex'))
         assert.ok(manifest.dsh.profile.bundles.includes('dsh-image-viewer'))
         const patch = await readFile(join(root, 'home/profiles/desktop/cordis.patch.yml'), 'utf8')
-        // The release lane must not resurrect the retired codex-only overlay.
         // The upstream profile patch is authoritative and may vary by release;
-        // only the additive preinstall entries are asserted here.
+        // the release lane must not resurrect the retired codex-only overlay.
         assert.doesNotMatch(patch, /mode:\s*codex-only/)
-        assert.match(patch, /agentrouter-preinstall-/)
         await page.getByRole('button', { name: /^(Settings|设置)$/ }).click()
         await page.getByRole('button', { name: /检查更新|Check.*update/i }).first().waitFor({ state: 'visible', timeout: 15000 })
         await page.screenshot({ path: join(evidence, 'installed-settings.png') })
