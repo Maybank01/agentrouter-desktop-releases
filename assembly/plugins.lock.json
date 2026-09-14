@@ -1,28 +1,20 @@
 {
   "schemaVersion": 1,
-  "releaseSequence": 4,
+  "releaseSequence": 5,
   "sourceRepository": "Maybank01/agentrouter-dsh-plugins",
   "environment": "v3-candidate",
   "packages": [
     {
       "name": "@agentrouter-top/dsh-codex",
-      "version": "0.1.0-beta.19",
+      "version": "0.1.0-beta.23",
       "direct": true,
       "preinstallEntry": "@agentrouter-top/dsh-codex/desktop-preinstall",
       "preinstallConfig": {
         "productProfile": true
       },
-      "bytes": 83175,
-      "sha256": "d92687feee25d8fbb191a2201f57f5048e26f587d4542ec933be8219e693bdee",
-      "integrity": "sha512-kWFwu0OvMwUuVPgOPEIdM/1eeeDPn3ufsP5coLppZsY1YziIbXlWsnByPGg9AwvrJgV8MB0tmo0Z4Qu5vuntkQ=="
-    },
-    {
-      "name": "@agentrouter-top/relay-dsh-plugin-codex",
-      "version": "0.2.2-agentrouter.9",
-      "direct": false,
-      "bytes": 661738,
-      "sha256": "1f05f21061058f1512e36d37a2f262d670b7e7620d2482660d12396a86bec98d",
-      "integrity": "sha512-fL6DkNi3hPiZy+nhzd03/a3aTvxs6xNY1Z75cmV9cBbC4bwl0JbnJtzKJTAP5znWvGGxhFg9Zp2FRIt/QkTO1Q=="
+      "bytes": 192364,
+      "sha256": "227711591e2d4dfc14f32595b45325669c98b43d68fc2216f473e922d54016c5",
+      "integrity": "sha512-5je5N46+Gy9cY+MHwvLB15Fdq6O28PhMscu8Tsv9ilQcZFPyKEIEKRvbAAQJQiOPBcmMq5mf0Sd8srPmV5IY5Q=="
     },
     {
       "name": "dsh-image-viewer",

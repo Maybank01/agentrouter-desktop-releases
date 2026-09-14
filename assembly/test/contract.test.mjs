@@ -12,7 +12,7 @@ test('only the locked upstream and public npm packages are assembly inputs', () 
   assert.equal(plugins.packages.filter(pkg => pkg.preinstallEntry).length, 1)
   assert.ok(Number.isSafeInteger(plugins.releaseSequence) && plugins.releaseSequence >= 2)
   assert.deepEqual(npmChannel.packages.map(pkg => pkg.distTag ?? pkg.fromPackage),
-    ['next', '@agentrouter-top/dsh-codex', 'beta'])
+    ['next', 'beta'])
   assert.deepEqual(allowedChanges, ['dsh-plugin-desktop/package.json',
     'dsh-plugin-desktop/cordis.patch.yml', 'yarn.lock', '.yarnrc.yml'])
 })
