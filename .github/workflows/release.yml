@@ -1,8 +1,6 @@
-name: Publish AgentRouter Desktop
+name: Manually publish optional upstream Desktop
 
 on:
-  schedule:
-    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -20,6 +18,7 @@ concurrency:
 jobs:
   probe:
     name: Check npm
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

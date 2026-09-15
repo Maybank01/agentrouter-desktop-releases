@@ -17,7 +17,7 @@ test('the public release repository contains assembly inputs, not product source
   assert.doesNotMatch(JSON.stringify(manifest.scripts), /workspace|components:|promote|plugins:/)
 })
 
-test('one scheduled workflow checks npm and publishes this repository formal release', () => {
+test('optional Desktop publication is manually dispatched on main and never follows npm automatically', () => {
   const directory = join(root, '.github/workflows')
   assert.deepEqual(readdirSync(directory).sort(), ['ci.yml', 'release.yml'])
   const ci = readFileSync(join(directory, 'ci.yml'), 'utf8')
@@ -25,8 +25,9 @@ test('one scheduled workflow checks npm and publishes this repository formal rel
   assert.doesNotMatch(ci, /npm publish|PUBLIC_RELEASE_APP/u)
 
   const release = readFileSync(join(directory, 'release.yml'), 'utf8')
-  assert.match(release, /schedule:/)
+  assert.doesNotMatch(release, /schedule:|cron:|repository_dispatch:|workflow_run:/)
   assert.match(release, /workflow_dispatch:/)
+  assert.match(release, /github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/)
   assert.equal((release.match(/corepack@0\.36\.0/g) ?? []).length, 2)
   assert.equal((release.match(/npm install --prefix [^\r\n]+ corepack@0\.36\.0/g) ?? []).length, 2)
   assert.doesNotMatch(release, /npm install --global corepack/)
