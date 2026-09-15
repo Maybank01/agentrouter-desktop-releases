@@ -4,7 +4,9 @@
 
 **[打开最新正式 Release](https://github.com/Maybank01/agentrouter-desktop-releases/releases/latest)**
 
-本仓库每小时检查一次指定的 npm dist-tag。发现新版本后，会构建原版 DSH Desktop、执行全新静默安装和桌面启动验收，然后直接发布为本仓库的正式 GitHub Release。整个流程只使用本仓库的 GitHub Actions 权限，不需要跨仓库 Token、GitHub App 或 Coolify 定时任务。
+客户端与 AgentRouter 插件独立交付：日常使用上游 DSH 客户端，插件通过 DSH 的插件管理独立安装和更新。插件发布不再自动触发桌面安装包重建。
+
+本仓库保留可选的上游桌面预装发行能力，仅在明确需要发布安装包时，从 `main` 手动运行发布工作流。该流程仍会校验 npm 包、构建原版 DSH Desktop、执行全新安装和桌面启动验收，再发布安装包。现有下载资产保留。
 
 安装包仍未签名，Windows 可能显示未知发布者提示。版本、SHA-256、npm 包锁和验收记录均随对应 Release 发布。
 
