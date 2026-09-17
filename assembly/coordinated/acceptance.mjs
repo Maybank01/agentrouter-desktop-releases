@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { extractFile } from '@electron/asar'
 import { load, dump } from 'js-yaml'
@@ -19,6 +20,7 @@ const candidate = legacyExecutable ? first : process.argv[3] && !process.argv[3]
 const migratePnpm10 = process.argv.includes('--pnpm10')
 const nativeUpdate = process.argv.includes('--native-update')
 if (nativeUpdate) {
+  assert.equal(process.platform, 'win32')
   assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Installer acceptance requires a disposable hosted Windows runner')
   assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted')
   assert.ok(candidate && !legacyExecutable)
@@ -29,12 +31,26 @@ assert.ok(!migratePnpm10 || candidate, '--pnpm10 requires a baseline and target 
 const stateRoot = join(root, '.local/coordinated/acceptance')
 mkdirSync(stateRoot, { recursive: true })
 const state = mkdtempSync(join(stateRoot, 'run-'))
-const home = join(state, 'home')
+const home = nativeUpdate ? join(homedir(), '.dsh') : join(state, 'home')
+const electronHome = nativeUpdate ? join(process.env.APPDATA, 'AgentRouter') : join(state, 'electron')
+if (nativeUpdate) {
+  // NSIS starts the updated app through Explorer, which does not inherit the
+  // driver's DSH_HOME or --user-data-dir. Give this disposable worker's empty
+  // default locations isolated targets so both launches use the same data.
+  // Never replace an existing Home, and never create these aliases locally.
+  for (const [location, target] of [[home, join(state, 'home')], [electronHome, join(state, 'electron')]]) {
+    assert.equal(existsSync(location), false, `Installer acceptance requires an empty worker profile: ${location}`)
+    mkdirSync(target, { recursive: true })
+    mkdirSync(dirname(location), { recursive: true })
+    symlinkSync(target, location, 'junction')
+  }
+}
 const env = { ...process.env }
 for (const name of Object.keys(env)) if (/API_KEY|CODEX_HOME|RELAY_CODEX|NODE_OPTIONS|NODE_AUTH_TOKEN|NPM_TOKEN|^(?:WIN_)?CSC_/i.test(name)
   || /^(?:GH_TOKEN|GITHUB_TOKEN|DSH_DESKTOP_WINDOWS_)/i.test(name)
   || ['dsh_home', 'npm_config_userconfig', 'electron_run_as_node'].includes(name.toLowerCase())) delete env[name]
-Object.assign(env, { DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1', DSH_DESKTOP_DIAGNOSTIC_FILE: join(state, 'startup-error.log') })
+Object.assign(env, { ...(!nativeUpdate ? { DSH_HOME: home } : {}), DSH_TELEMETRY_DISABLED: '1',
+  DSH_DESKTOP_DIAGNOSTIC_FILE: join(state, 'startup-error.log') })
 if (legacyExecutable) env.DEEPSEEK_API_KEY = 'sk-desktop-acceptance-fixture'
 let modelRequests = 0
 const gateway = createServer(async (req, res) => {
@@ -60,7 +76,7 @@ const launch = async receipt => {
   const started = Date.now()
   console.log(JSON.stringify({ phase: 'launching', productVersion: receipt.input.productVersion }))
   app = await _electron.launch({ executablePath: receipt.executable,
-    args: ['--lang=zh-CN', `--user-data-dir=${join(state, 'electron')}`], cwd: state, env, timeout: 180000 })
+    args: ['--lang=zh-CN', ...(!nativeUpdate ? [`--user-data-dir=${electronHome}`] : [])], cwd: state, env, timeout: 180000 })
   app.process().stderr.on('data', bytes => writeFileSync(join(state, 'electron.log'), bytes, { flag: 'a' }))
   // Test failures belong in the isolated diagnostics, not in native dialogs on
   // the developer's desktop or dialogs that stall a disposable CI worker.
@@ -105,7 +121,7 @@ const launch = async receipt => {
   }
   const facts = await app.evaluate(({ app }) => ({ version: app.getVersion(), userData: app.getPath('userData'), packaged: app.isPackaged }))
   assert.equal(facts.version, receipt.input.productVersion)
-  assert.equal(resolve(facts.userData), resolve(state, 'electron'))
+  assert.equal(resolve(facts.userData), resolve(electronHome))
   assert.equal(facts.packaged, true)
   assert.deepEqual(errors, [])
   launches.push({ productVersion: receipt.input.productVersion, durationMs: Date.now() - started })
@@ -221,11 +237,13 @@ try {
           return JSON.parse(extractFile(join(dirname(candidate.executable), 'resources/app.asar'), 'package.json').toString()).version
         } catch { return undefined }
       }, { timeout: 180000 }).toBe(candidate.input.productVersion)
+      console.log(JSON.stringify({ phase: 'installer-replaced-app', productVersion: candidate.input.productVersion }))
       // The NSIS run-after-install process must start the new host and activate
       // its seed before the driver reconnects for conversation checks.
       await expect.poll(() => {
         try { return json(join(profile, 'desktop-release.json')).productVersion } catch { return undefined }
       }, { timeout: 180000 }).toBe(candidate.input.productVersion)
+      console.log(JSON.stringify({ phase: 'restarted-app-activated-profile', productVersion: candidate.input.productVersion }))
       const processEnv = { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }
       await expect.poll(() => Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
         '@(Get-Process | Where-Object { $_.Path -eq $env:AGENTROUTER_TEST_INSTALLED_EXE -and $_.MainWindowHandle -ne 0 }).Count'],

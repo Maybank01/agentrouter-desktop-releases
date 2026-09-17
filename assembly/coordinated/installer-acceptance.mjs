@@ -19,6 +19,8 @@ const target = json(targetFile)
 const work = mkdtempSync(join(process.env.RUNNER_TEMP, 'agentrouter-installed-'))
 const env = { ...process.env, AGENTROUTER_COORDINATED_WORK_DIR: join(work, 'candidates') }
 async function run(exe, args, name, overrides = {}) {
+  const started = Date.now()
+  console.error(JSON.stringify({ installerAcceptance: name, phase: 'started' }))
   const log = join(work, name + '.log')
   const output = createWriteStream(log)
   const child = spawn(exe, args, { cwd: root, env: { ...env, ...overrides }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -26,6 +28,7 @@ async function run(exe, args, name, overrides = {}) {
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve) })
   await new Promise(resolve => output.end(resolve))
   if (code !== 0) throw new Error(`${name} failed (${code}); ${log}\n${readFileSync(log, 'utf8').slice(-6000)}`)
+  console.error(JSON.stringify({ installerAcceptance: name, phase: 'passed', durationMs: Date.now() - started }))
   return log
 }
 const node = (script, args, name) => run(process.execPath, [join(directory, script), ...args], name)
