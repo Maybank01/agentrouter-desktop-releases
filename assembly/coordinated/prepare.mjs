@@ -1,0 +1,34 @@
+/** Source assembly only. Never updates an installed application or a feed. */
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+export const directory = fileURLToPath(new URL('.', import.meta.url))
+export const root = resolve(directory, '../..')
+export const lock = JSON.parse(readFileSync(join(directory, 'upstream.lock.json'), 'utf8'))
+export const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 120000 }).trim()
+
+export function prepareSource() {
+  const base = process.env.AGENTROUTER_COORDINATED_WORK_DIR
+    ? resolve(process.env.AGENTROUTER_COORDINATED_WORK_DIR) : join(root, '.local/coordinated')
+  mkdirSync(base, { recursive: true })
+  const output = mkdtempSync(join(base, 'candidate-'))
+  const source = join(output, 'source')
+  const mirror = process.env.AGENTROUTER_UPSTREAM_SOURCE
+  git(output, 'clone', ...(mirror ? ['--shared', resolve(mirror)] : ['--depth', '1', '--branch', lock.tag, lock.repository]), source)
+  git(source, 'checkout', '--detach', lock.commit)
+  assert.equal(git(source, 'rev-parse', 'HEAD'), lock.commit)
+  assert.equal(git(source, 'rev-parse', 'HEAD^{tree}'), lock.tree)
+  const patch = join(directory, lock.patch)
+  git(source, 'apply', '--check', patch)
+  git(source, 'apply', patch)
+  const changes = git(source, 'diff', '--name-only').split('\n')
+  assert.ok(changes.length > 0 && changes.every(path => path.startsWith('apps/desktop/') || path === 'apps/desktop-host/src/index.ts'))
+  symlinkSync(join(directory, 'node_modules'), join(source, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+  writeFileSync(join(output, 'source.json'), JSON.stringify({ source, upstreamCommit: lock.commit, upstreamTree: lock.tree, changes }, null, 2) + '\n')
+  return { source, output }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) console.log(JSON.stringify(prepareSource()))

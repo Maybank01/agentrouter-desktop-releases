@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "repository": "Maybank01/agentrouter-desktop",
+  "sourceDirectory": "assembly/coordinated",
+  "commit": "924ee51118290c8b0d9ca2550a2e1e7d598938c2",
+  "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
+  "files": [
+    {
+      "path": "acceptance.mjs",
+      "bytes": 20840,
+      "sha256": "b00c79289c7ef9d5bb1e7f72e493aa53c615d9998c79f9764038a31b0a623c39"
+    },
+    {
+      "path": "build.mjs",
+      "bytes": 11429,
+      "sha256": "0b52eec953a67643ce7eded6050cec2f8f839f58b8679c3d263e5206ffe03607"
+    },
+    {
+      "path": "coordinated-delivery.patch",
+      "bytes": 58635,
+      "sha256": "028255e3099af62c54a54a06d8fbade1d13566832cb0e91993ff68be6c5092be"
+    },
+    {
+      "path": "installer-acceptance.mjs",
+      "bytes": 6704,
+      "sha256": "02e8d04e08957f8420ad92ebb80238c4ec93f58ca85720e7a19d41061228a30e"
+    },
+    {
+      "path": "installer-baseline.json",
+      "bytes": 568,
+      "sha256": "2bd66d61a9972a2b1fd6d13793180453b97b2bc8709e71c515d8c54ad94bd046"
+    },
+    {
+      "path": "legacy-installer.json",
+      "bytes": 366,
+      "sha256": "4b5a8d9b3a5dd1a701fe926f6830db2651f49c9bbb63e0116e27f8219c4512f6"
+    },
+    {
+      "path": "package-installer.mjs",
+      "bytes": 5420,
+      "sha256": "b94bdf5c48236d15de65ca8b31bfbd15fe1e79751794c0a27dd21191970982b5"
+    },
+    {
+      "path": "package.json",
+      "bytes": 693,
+      "sha256": "3e806b242869eaaca68ec04cb3178a7d5625df841d98125c55e4e2f50d201e2f"
+    },
+    {
+      "path": "package-lock.json",
+      "bytes": 541851,
+      "sha256": "321bc121b0025d3166d9715b5e27f8f314c1b8a37b23c1b4f252deb1ad0456d2"
+    },
+    {
+      "path": "prepare.mjs",
+      "bytes": 2138,
+      "sha256": "74e4de21dc4e3c68ec4c94984c22e1d831f96c8c92c84469e38405f4881ea64b"
+    },
+    {
+      "path": "release.json",
+      "bytes": 568,
+      "sha256": "e50e2889c3feb3174b5649b193e50fc25bd1a66e5cef6e261faa019c52d0a335"
+    },
+    {
+      "path": "store-migration-acceptance.mjs",
+      "bytes": 11325,
+      "sha256": "ee34484e78374c3690ebbc136af566e4c4a03b52e9d1b495908e59cc0445876a"
+    },
+    {
+      "path": "test.mjs",
+      "bytes": 534,
+      "sha256": "86ae87b3379d89e3a4e4e64f6daaf3caf0939288ef8184944e953219d769cb93"
+    },
+    {
+      "path": "upstream.lock.json",
+      "bytes": 500,
+      "sha256": "5b0124b0b3ce1225c9b081effe751c64da39bfb798e6f5d901010d206d684c14"
+    },
+    {
+      "path": "vitest.config.mjs",
+      "bytes": 219,
+      "sha256": "675cebd8c8a790fe56df8c4aa37ffe8cc0558610b6660f47aba809c37e9b9624"
+    }
+  ]
+}

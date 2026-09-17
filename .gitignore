@@ -22,4 +22,5 @@ dsh-community-market/lib/
 packages/*/lib/
 packages/*/dist/
 artifacts/
+.local/
 *.log

@@ -1,14 +1,34 @@
-# AgentRouter Desktop 下载
+# AgentRouter Desktop 发行
 
-## 最新正式版
+[现有公开版本与下载](https://github.com/Maybank01/agentrouter-desktop-releases/releases/latest)
 
-**[打开最新正式 Release](https://github.com/Maybank01/agentrouter-desktop-releases/releases/latest)**
+本仓库是 AgentRouter 桌面安装器的唯一发行仓库。新的协同发行使用官方 DeepSeek Harness
+Desktop：一次产品更新同时安装经过验证的 DSH 与 AgentRouter 插件组合，界面只保留一个产品更新入口。
+官方或社区 DSH 中独立安装的用户仍使用同一个公开 npm 插件，由原客户端管理宿主更新。
 
-客户端与 AgentRouter 插件独立交付：日常使用上游 DSH 客户端，插件通过 DSH 的插件管理独立安装和更新。插件发布不再自动触发桌面安装包重建。
+协同安装器当前仍为隔离候选，尚未配置正式 Windows 代码签名，也未切换官网或公开更新源。
+现有安装器、历史资产与更新地址继续保留。插件的 npm 发布与正式安装器发布分别验收。
 
-本仓库保留可选的上游桌面预装发行能力，仅在明确需要发布安装包时，从 `main` 手动运行发布工作流。该流程仍会校验 npm 包、构建原版 DSH Desktop、执行全新安装和桌面启动验收，再发布安装包。现有下载资产保留。
+## 协同发行
 
-安装包仍未签名，Windows 可能显示未知发布者提示。版本、SHA-256、npm 包锁和验收记录均随对应 Release 发布。
+原生发行适配层由 `Maybank01/agentrouter-desktop/assembly/coordinated` 维护。
+本仓库的 `assembly/coordinated/adapter-source.json` 记录导出来源与逐文件摘要；
+构建只使用已发布的精确 npm tarball，不在发行仓库编译另一份插件。
+
+Windows CI 在临时托管运行器上执行真实 NSIS 安装、原生更新下载、自动重启及旧客户端迁移，
+检查账号、原会话、第三方插件和单一更新入口。测试安装器仅使用回环 feed，不能转为正式 Release。
+产品版本与插件字节由 `assembly/coordinated/release.json` 绑定；只更新插件时也分配新产品版本。
+
+正式发行使用 `release.yml`，在 main 手动选择 `coordinated`；默认 `publish: false` 只做验收。
+发布要求正式发行输入、可用的上游签名配置及显式 publish。签名产物先进入 draft Release，
+另一台临时 Windows 运行器验证 Authenticode 并实际安装通过后，才发布同一份字节。
+
+签名运行器标签为 `self-hosted / Windows / X64 / agentrouter-signing`，使用 `windows-signing` 环境。
+现有适配沿用上游 SafeNet SignTool，需配置 `DSH_DESKTOP_WINDOWS_CER_FILE`、
+`DSH_DESKTOP_WINDOWS_SIGNTOOL`、`DSH_DESKTOP_WINDOWS_KEY_CONTAINER`，并通过环境 Secret
+提供 `DSH_DESKTOP_WINDOWS_TOKEN_PIN`。签名证书和 PIN 不进入本仓库。
+
+历史社区组装仍可通过 `legacy` 手动发行。普通 npm 插件发布不会自动触发桌面发行或改写第三方客户端。
 
 ---
 

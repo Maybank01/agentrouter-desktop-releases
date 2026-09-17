@@ -24,7 +24,9 @@ test('optional Desktop publication is manually dispatched on main and never foll
   assert.match(ci, /contents: read/)
   assert.doesNotMatch(ci, /npm publish|PUBLIC_RELEASE_APP/u)
 
-  const release = readFileSync(join(directory, 'release.yml'), 'utf8')
+  // Preserve the historical community lane's contract; the new product lane
+  // below is separately bound to the exported source and installed acceptance.
+  const release = readFileSync(join(directory, 'release.yml'), 'utf8').split('\n  coordinated:')[0]
   assert.doesNotMatch(release, /schedule:|cron:|repository_dispatch:|workflow_run:/)
   assert.match(release, /workflow_dispatch:/)
   assert.match(release, /github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/)
