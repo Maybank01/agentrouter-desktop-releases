@@ -64,8 +64,8 @@ const launch = async receipt => {
   app.process().stderr.on('data', bytes => writeFileSync(join(state, 'electron.log'), bytes, { flag: 'a' }))
   // Test failures belong in the isolated diagnostics, not in native dialogs on
   // the developer's desktop or dialogs that stall a disposable CI worker.
-  await app.evaluate(async ({ dialog, app }, diagnostic) => {
-    const { appendFileSync } = await import('node:fs')
+  await app.evaluate(({ dialog, app }, diagnostic) => {
+    const { appendFileSync } = process.getBuiltinModule('fs')
     const original = dialog.showMessageBox.bind(dialog)
     dialog.showErrorBox = (title, content) => { appendFileSync(diagnostic, `${title}: ${content}\n`); app.exit(1) }
     dialog.showMessageBox = async (...args) => {
@@ -226,10 +226,13 @@ try {
       await expect.poll(() => {
         try { return json(join(profile, 'desktop-release.json')).productVersion } catch { return undefined }
       }, { timeout: 180000 }).toBe(candidate.input.productVersion)
-      const processes = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        '$p = @(Get-Process | Where-Object { $_.Path -eq $env:AGENTROUTER_TEST_INSTALLED_EXE }); if ($p.Count -eq 0) { throw "Installer did not restart the app" }; $ids = @($p | ForEach-Object Id); $p | Stop-Process -Force; ConvertTo-Json -InputObject $ids -Compress'],
-      { env: { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }, encoding: 'utf8', windowsHide: true }))
-      assert.ok(processes.length > 0)
+      const processEnv = { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }
+      await expect.poll(() => Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        '@(Get-Process | Where-Object { $_.Path -eq $env:AGENTROUTER_TEST_INSTALLED_EXE -and $_.MainWindowHandle -ne 0 }).Count'],
+      { env: processEnv, encoding: 'utf8', windowsHide: true }).trim()), { timeout: 90000 }).toBeGreaterThan(0)
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        '$p = @(Get-Process | Where-Object { $_.Path -eq $env:AGENTROUTER_TEST_INSTALLED_EXE -and $_.MainWindowHandle -ne 0 }); if ($p.Count -eq 0) { throw "Installer did not restart the app" }; foreach ($appProcess in $p) { if (!$appProcess.CloseMainWindow() -or !$appProcess.WaitForExit(15000)) { throw "Restarted app did not close cleanly" } }'],
+      { env: processEnv, windowsHide: true, stdio: 'inherit' })
     }
     await launch(candidate)
     if (legacyExecutable) {
