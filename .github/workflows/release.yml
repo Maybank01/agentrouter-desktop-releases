@@ -1,8 +1,17 @@
-name: Manually publish optional upstream Desktop
+name: Manually deliver AgentRouter Desktop
 
 on:
   workflow_dispatch:
     inputs:
+      delivery:
+        description: Product delivery lane
+        type: choice
+        options: [coordinated, legacy]
+        default: coordinated
+      publish:
+        description: Publish the reviewed release after installed acceptance
+        type: boolean
+        default: false
       force:
         description: Rebuild the currently locked version
         type: boolean
@@ -18,7 +27,7 @@ concurrency:
 jobs:
   probe:
     name: Check npm
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'legacy' && inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -229,3 +238,114 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
           path: artifacts/
+
+  coordinated:
+    name: Accept coordinated installers before signing
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      receipt: ${{ steps.accept.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - name: Require a reviewed formal version before publication
+        if: inputs.publish
+        shell: pwsh
+        run: |
+          $release = Get-Content assembly/coordinated/release.json -Raw | ConvertFrom-Json
+          if ($release.candidateOnly) { throw 'The product version is still candidate-only' }
+      - run: npm test
+      - run: npm ci --ignore-scripts --prefix assembly/coordinated
+      - run: node assembly/coordinated/test.mjs
+      - id: accept
+        run: node assembly/coordinated-candidate.mjs
+
+  coordinated_sign:
+    name: Sign and stage the exact product release
+    needs: coordinated
+    if: inputs.publish && inputs.delivery == 'coordinated'
+    runs-on: [self-hosted, Windows, X64, agentrouter-signing]
+    environment: windows-signing
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.stage.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: npm test
+      - run: npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Build the reviewed source with the public plugin
+        id: build
+        shell: pwsh
+        run: |
+          node assembly/coordinated/build.mjs > candidate-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content candidate-build.log -Tail 60; throw 'Product build failed' }
+          $built = Get-Content candidate-build.log -Tail 1 | ConvertFrom-Json
+          "candidate=$($built.candidate)" >> $env:GITHUB_OUTPUT
+      - name: Create signed NSIS installer using upstream signer
+        id: package
+        shell: pwsh
+        env:
+          CANDIDATE_FILE: ${{ steps.build.outputs.candidate }}
+          DSH_DESKTOP_WINDOWS_CER_FILE: ${{ vars.DSH_DESKTOP_WINDOWS_CER_FILE }}
+          DSH_DESKTOP_WINDOWS_SIGNTOOL: ${{ vars.DSH_DESKTOP_WINDOWS_SIGNTOOL }}
+          DSH_DESKTOP_WINDOWS_KEY_CONTAINER: ${{ vars.DSH_DESKTOP_WINDOWS_KEY_CONTAINER }}
+          DSH_DESKTOP_WINDOWS_TOKEN_PIN: ${{ secrets.DSH_DESKTOP_WINDOWS_TOKEN_PIN }}
+        run: |
+          node assembly/coordinated/package-installer.mjs "$env:CANDIDATE_FILE" > installer-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content installer-build.log -Tail 60; throw 'Signed installer failed' }
+          $packaged = Get-Content installer-build.log -Tail 1 | ConvertFrom-Json
+          "receipt=$($packaged.installerReceipt)" >> $env:GITHUB_OUTPUT
+      - name: Stage signed bytes without changing the product feed
+        id: stage
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALLER_RECEIPT: ${{ steps.package.outputs.receipt }}
+          ACCEPTED_CANDIDATE_JSON: ${{ needs.coordinated.outputs.receipt }}
+        run: |
+          node assembly/coordinated-release.mjs stage "$env:INSTALLER_RECEIPT"
+          if ($LASTEXITCODE -ne 0) { throw 'Signed release staging failed' }
+          $release = Get-Content assembly/coordinated/release.json -Raw | ConvertFrom-Json
+          "tag=v$($release.productVersion)" >> $env:GITHUB_OUTPUT
+
+  coordinated_publish:
+    name: Install signed bytes before making them available
+    needs: coordinated_sign
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Download the exact draft assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.coordinated_sign.outputs.tag }}
+        run: gh release download "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir .local/signed-release
+      - name: Verify Authenticode and install the signed product
+        run: node assembly/coordinated-release.mjs accept .local/signed-release
+      - name: Publish the already installed bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node assembly/coordinated-release.mjs publish .local/signed-release

@@ -28,3 +28,19 @@ jobs:
           node-version: 24.15.0
       - run: npm test
       - run: git diff --check
+  coordinated:
+    name: Installed product update and legacy migration
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: npm test
+      - run: npm ci --ignore-scripts --prefix assembly/coordinated
+      - run: node assembly/coordinated/test.mjs
+      - name: Build and accept the product installer on a disposable worker
+        run: node assembly/coordinated-candidate.mjs
