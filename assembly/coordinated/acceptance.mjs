@@ -78,6 +78,9 @@ const launch = async receipt => {
   app = await _electron.launch({ executablePath: receipt.executable,
     args: ['--lang=zh-CN', ...(!nativeUpdate ? [`--user-data-dir=${electronHome}`] : [])], cwd: state, env, timeout: 180000 })
   app.process().stderr.on('data', bytes => writeFileSync(join(state, 'electron.log'), bytes, { flag: 'a' }))
+  // The preceding Electron 43 host must finish initializing its main process
+  // before Playwright evaluates Electron's module handle.
+  page = await app.firstWindow({ timeout: 180000 })
   // Test failures belong in the isolated diagnostics, not in native dialogs on
   // the developer's desktop or dialogs that stall a disposable CI worker.
   await app.evaluate(({ dialog, app }, diagnostic) => {
@@ -91,7 +94,6 @@ const launch = async receipt => {
       return { response: options.cancelId ?? 1, checkboxChecked: false }
     }
   }, join(state, 'startup-error.log'))
-  page = await app.firstWindow({ timeout: 180000 })
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   if (receipt.legacy) {
