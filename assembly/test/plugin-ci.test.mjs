@@ -120,11 +120,14 @@ test('failure evidence is uploaded only to private storage; credentials are reda
   const root = mkdtempSync(join(tmpdir(), 'agentrouter-ci-store-'))
   try {
     const token = 'fake-fixture-credential'
+    writeFileSync(join(root, 'prepare.log'), '')
+    writeFileSync(join(root, 'delivery.log'), '')
     writeFileSync(join(root, 'validation.log'), `failed private source\n${token}\n`)
     const request = requestFromEnvironment(environment)
     const receipt = resultReceipt(request, { validationPassed: false, deliveryPassed: true, stage: 'validation-failed' })
     const calls = []
     const api = async (path, options) => {
+      if (options?.binary) assert.ok(options.body.length > 0, 'GitHub rejects zero-byte assets')
       calls.push({ path, options })
       if (path === `/repos/${sourceRepository}`) return { private: true }
       if (path.includes('/releases/tags/')) return null
@@ -136,6 +139,7 @@ test('failure evidence is uploaded only to private storage; credentials are reda
     assert.equal(calls[2].options.body.prerelease, true)
     assert.equal(calls[2].options.body.make_latest, 'false')
     const uploads = calls.filter(call => call.path.includes('/assets?'))
+    assert.equal(uploads.length, 2, 'Only the non-empty validation log and receipt are uploaded')
     assert.match(uploads.at(-1).path, /name=result.json$/)
     assert.doesNotMatch(uploads[0].options.body.toString(), /fake-fixture-credential/)
     const uploaded = JSON.parse(uploads.at(-1).options.body)
