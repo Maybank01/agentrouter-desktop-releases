@@ -23,6 +23,9 @@ Windows CI 在临时托管运行器上执行真实 NSIS 安装、原生更新下
 发布要求正式发行输入、可用的上游签名配置及显式 publish。签名产物先进入 draft Release，
 另一台临时 Windows 运行器验证 Authenticode 并实际安装通过后，才发布同一份字节。
 
+发布后会匿名下载核对安装器、回执与实际更新源；观察失败可沿同一运行恢复，不重打包或覆盖已发布字节。
+具体候选命令、签名配置和恢复步骤见 [协同发行操作说明](assembly/COORDINATED-RELEASE.md)。
+
 签名运行器标签为 `self-hosted / Windows / X64 / agentrouter-signing`，使用 `windows-signing` 环境。
 现有适配沿用上游 SafeNet SignTool，需配置 `DSH_DESKTOP_WINDOWS_CER_FILE`、
 `DSH_DESKTOP_WINDOWS_SIGNTOOL`、`DSH_DESKTOP_WINDOWS_KEY_CONTAINER`，并通过环境 Secret

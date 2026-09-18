@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { root } from './lib.mjs'
+import { verifyCoordinatedPublicRelease } from './coordinated-public.mjs'
 
 const repo = 'Maybank01/agentrouter-desktop-releases'
 const adapter = join(root, 'assembly/coordinated')
@@ -125,12 +126,24 @@ if (phase === 'stage') {
   const installer = receipt.assets.find(file => file.name.endsWith('.exe'))
   assert.equal(acceptance.signedInstallerSha256, installer.sha256)
   const remote = JSON.parse(gh(['api', `repos/${repo}/releases/tags/${tag}`]))
-  assert.equal(remote.draft, true)
+  assert.equal(remote.prerelease, false)
   for (const file of receipt.assets) {
     const asset = remote.assets.find(asset => asset.name === file.name)
     assert.ok(asset); assert.equal(asset.size, file.bytes); assert.equal(asset.digest, `sha256:${file.sha256}`)
   }
-  gh(['release', 'upload', tag, join(path, 'signed-installed-acceptance.json'), '--repo', repo])
-  gh(['release', 'edit', tag, '--repo', repo, '--draft=false', '--latest'])
-  console.log(JSON.stringify({ tag, published: true }))
+  if (remote.assets.some(asset => asset.name === 'signed-installed-acceptance.json')) {
+    // A failed anonymous observation may be resumed after publication. Retain
+    // the original installed receipt and feed; never overwrite accepted bytes.
+    const prior = JSON.parse(gh(['release', 'download', tag, '--repo', repo, '--pattern', 'signed-installed-acceptance.json', '--output', '-']))
+    assert.equal(prior.passed, true); assert.equal(prior.installerExecuted, true)
+    assert.equal(prior.sourceCommit, process.env.GITHUB_SHA)
+    assert.deepEqual(prior.input, input)
+    assert.equal(prior.patchSha256, patchSha256)
+    assert.equal(prior.signedInstallerSha256, installer.sha256)
+  } else {
+    assert.equal(remote.draft, true, 'A published release must already carry its installed receipt')
+    gh(['release', 'upload', tag, join(path, 'signed-installed-acceptance.json'), '--repo', repo])
+  }
+  if (remote.draft) gh(['release', 'edit', tag, '--repo', repo, '--draft=false', '--latest'])
+  console.log(JSON.stringify({ ...await verifyCoordinatedPublicRelease(input, receipt), published: true }))
 } else throw new Error('Expected stage, accept, or publish')
