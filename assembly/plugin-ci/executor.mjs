@@ -262,6 +262,9 @@ export async function storeResult({ request, files, receipt, token, api }) {
   const payloads = ['prepare.log', 'validation.log', 'delivery.log', 'executor.log']
     .filter(name => existsSync(join(files.root, name)))
     .map(name => ({ name, bytes: redactCredential(readFileSync(join(files.root, name)), token) }))
+    // Quiet successful checkout/sync stages can leave empty logs. GitHub rejects
+    // zero-byte Release assets; omit them so they cannot block the real receipt.
+    .filter(({ bytes }) => bytes.length > 0)
   receipt.logs = payloads.map(({ name, bytes }) => ({ name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }))
   writeFileSync(files.receipt, `${JSON.stringify(receipt, null, 2)}\n`)
   payloads.push({ name: 'result.json', bytes: readFileSync(files.receipt) })
@@ -333,7 +336,8 @@ async function main() {
     } catch { /* Invalid requests cannot choose a destination or disclose data. */ }
     // All private command output stays in the private evidence release. Do not
     // expose exception messages, source snippets, API bodies, or stack traces.
-    process.stderr.write(`AgentRouter private validation: ${action} failed; inspect the private CI evidence or credential configuration.\n`)
+    const apiCode = /^GITHUB_API_\d{3}$/.test(error.message ?? '') ? ` (${error.message})` : ''
+    process.stderr.write(`AgentRouter private validation: ${action} failed${apiCode}; inspect the private CI evidence or credential configuration.\n`)
     process.exitCode = 1
   }
 }
