@@ -22,3 +22,10 @@ only on disposable hosted Windows workers and use unsigned loopback-only feeds.
 Formal coordinated publication requires an explicit main dispatch, a non-candidate
 release input, configured upstream signing and installed acceptance of signed bytes.
 Do not promote test installers or redirect third-party clients to this feed.
+
+Product plugin validation may run independently on public hosted Windows workers
+through `plugin-validation.yml` and `assembly/plugin-ci`. This is execution glue,
+not another feature source. Keep private checkout and process output in temporary
+storage, send candidates and evidence only to the private plugin repository, and
+retain its protected npm publisher. Read `assembly/plugin-ci/README.md` before
+changing this cross-repository path. Do not add public source caches or artifacts.

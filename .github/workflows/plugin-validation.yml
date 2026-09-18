@@ -1,0 +1,62 @@
+name: Validate private AgentRouter plugin
+run-name: plugin-${{ inputs.task }}-${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Product validation task
+        required: true
+        type: choice
+        options: [verify, candidate, sync]
+      source_sha:
+        description: Immutable private source commit (40 lowercase hex characters)
+        required: true
+        type: string
+      request_id:
+        description: Unique request identifier from the private source dispatcher
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-validation-${{ inputs.task == 'sync' && 'sync' || inputs.request_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'Maybank01/agentrouter-desktop-releases' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    environment: plugin-ci
+    timeout-minutes: 90
+    env:
+      AGENTROUTER_CI_TASK: ${{ inputs.task }}
+      AGENTROUTER_SOURCE_SHA: ${{ inputs.source_sha }}
+      AGENTROUTER_CI_REQUEST_ID: ${{ inputs.request_id }}
+      AGENTROUTER_EXECUTOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Check out the public executor
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.15.0
+          package-manager-cache: false
+      - name: Authorize and fetch the exact private source
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ secrets.AGENTROUTER_CI_TOKEN }}
+        run: node assembly/plugin-ci/executor.mjs prepare
+      - name: Run product validation with private output
+        timeout-minutes: 77
+        run: node assembly/plugin-ci/executor.mjs execute
+      - name: Retain results and candidates in the private source repository
+        if: always()
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ secrets.AGENTROUTER_CI_TOKEN }}
+        run: node assembly/plugin-ci/executor.mjs finalize

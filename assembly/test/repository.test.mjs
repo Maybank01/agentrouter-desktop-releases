@@ -19,7 +19,7 @@ test('the public release repository contains assembly inputs, not product source
 
 test('optional Desktop publication is manually dispatched on main and never follows npm automatically', () => {
   const directory = join(root, '.github/workflows')
-  assert.deepEqual(readdirSync(directory).sort(), ['ci.yml', 'release.yml'])
+  assert.deepEqual(readdirSync(directory).sort(), ['ci.yml', 'plugin-validation.yml', 'release.yml'])
   const ci = readFileSync(join(directory, 'ci.yml'), 'utf8')
   assert.match(ci, /contents: read/)
   assert.doesNotMatch(ci, /npm publish|PUBLIC_RELEASE_APP/u)
