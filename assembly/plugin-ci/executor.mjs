@@ -227,6 +227,7 @@ export function resultReceipt(request, state) {
     finishedAt: new Date().toISOString(),
     ...(state.sourceAuthorization ? { sourceAuthorization: state.sourceAuthorization } : {}),
     ...(state.candidateTag ? { candidateTag: state.candidateTag } : {}),
+    ...(state.package ? { package: state.package } : {}),
   }
 }
 
@@ -292,7 +293,13 @@ export async function finalize(env) {
         try { stored = JSON.parse(lines.at(-1)) } catch { /* Never expose captured output. */ }
         const candidateTag = stored?.candidateTag ?? stored?.tag
         state.deliveryPassed = typeof candidateTag === 'string' && /^codex-candidate-[a-z0-9-]+$/.test(candidateTag)
-        if (state.deliveryPassed) state.candidateTag = candidateTag
+        if (state.deliveryPassed) {
+          requireValue(stored.package?.name === '@agentrouter-top/dsh-codex'
+            && /^[a-f0-9]{64}$/.test(stored.package.sha256 ?? '')
+            && Number.isSafeInteger(stored.package.size) && stored.package.size > 0, 'INVALID_CANDIDATE_PACKAGE')
+          state.candidateTag = candidateTag
+          state.package = stored.package
+        }
       }
     } else if (request.task === 'sync' && existsSync(join(files.source, '.local/public-ci/sync.json'))) {
       const result = await runPrivate(process.execPath, ['scripts/public-client-task.mjs', 'sync-publish'], {
