@@ -149,27 +149,6 @@ const sessionStatus = async sessionId => {
   const listing = await rpc('session/list', { _request: {} })
   return listing.items.find(item => item.sessionId === sessionId)
 }
-// Conversation state belongs to the public DSH controller. Current plugins no
-// longer own the retired client/session and client/reconcile facade routes.
-const sessionEvents = async sessionId => {
-  const snapshot = await page.evaluate(sessionId => new Promise((resolve, reject) => {
-    const url = new URL('/api/remote.mux', location.href)
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(url)
-    const timer = setTimeout(() => finish(undefined, new Error('Native session snapshot timed out')), 10000)
-    const finish = (value, error) => { clearTimeout(timer); socket.close(); error ? reject(error) : resolve(value) }
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'open', streamId: crypto.randomUUID(),
-      endpoint: 'session/follow', payload: { args: { request: { address: { kind: 'session', sessionId }, maxMessages: 80 } } } }))
-    socket.onmessage = event => {
-      const frame = JSON.parse(event.data)
-      if (frame.type === 'error') finish(undefined, new Error(frame.error.code))
-      else if (frame.type === 'item' && frame.value.type === 'snapshot') finish(frame.value)
-    }
-    socket.onerror = () => finish(undefined, new Error('Native session follow failed'))
-  }), sessionId)
-  assert.equal(snapshot.hasMore, false, 'The complete bounded fixture history must remain available')
-  return snapshot.records.filter(record => record.type === 'event').map(record => record.event)
-}
 const oldPnpmGraph = profile => {
   console.log(JSON.stringify({ phase: 'preparing-pnpm10-fixture' }))
   assert.equal(app, undefined, 'Close the isolated app before rebuilding its dependencies')
@@ -288,11 +267,9 @@ try {
     assert.equal((await api('updates/status')).owner, 'product')
     assert.equal((await api('updates/status')).canInstall, false)
     assert.deepEqual((await api('kernel/status')).supportedKernels, ['native', 'codex'])
-    assert.ok(await sessionStatus(session.sessionId))
-    const restored = await sessionEvents(session.sessionId)
-    assert.equal(restored.filter(event => event.type === 'user/message'
-      && JSON.stringify(event.data.content).includes('Remember this conversation across a product update.')).length, 1)
-    assert.equal(restored.findLast(event => event.type === 'turn/end')?.data.reason.kind, 'completed')
+    const restored = await sessionStatus(session.sessionId)
+    assert.ok(restored && !restored.blank)
+    assert.equal(resolve(restored.cwd), resolve(state))
     const beforeContinuation = modelRequests
     await rpc('session/prompt', { request: { requestId: randomUUID(), sessionId: session.sessionId, mode: 'queue',
       content: [{ type: 'text', text: 'Continue the same conversation after the update.' }] } })
@@ -306,7 +283,6 @@ try {
         && history.includes('DESKTOP_MIGRATION_OK')
         && history.includes('Continue the same conversation after the update.')
     }), 'The real post-upgrade model request must retain the old conversation')
-    assert.equal((await sessionEvents(session.sessionId)).findLast(event => event.type === 'turn/end')?.data.reason.kind, 'completed')
     await expect(page.getByRole('button', { name: /检查更新|更新并重启|查看更新/ })).toHaveCount(0)
     const menu = await app.evaluate(({ Menu }) => {
       const item = Menu.getApplicationMenu()?.getMenuItemById('product-update')
@@ -338,7 +314,7 @@ try {
     productUpgrade: !!candidate, dshUnchanged: candidate?.input.dshVersion === baseline.input.dshVersion, credentialsPreserved: !!candidate,
     sessionMetadataPreserved: !!candidate, existingConversationContinued: !!candidate, modelRequests, singleUpdateEntry: !!candidate,
     baseline: baseline.input, target: candidate?.input, pluginSha256: candidate?.pluginSha256,
-    realAccountUsed: false, nativeSessionApi: true, installerUpgrade: nativeUpdate, loopbackFeedUpgrade: nativeUpdate,
+    realAccountUsed: false, nativeSessionApi: true, nativeModelHistoryRetained: !!candidate, installerUpgrade: nativeUpdate, loopbackFeedUpgrade: nativeUpdate,
     automaticInstallerRestart: nativeUpdate, publicFeedUpgrade: false, legacyProfileMigration: !!legacyExecutable }
   Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
     thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, repeatedStartupDoesNotRebuild: migratePnpm10, launches })

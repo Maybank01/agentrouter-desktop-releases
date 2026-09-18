@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "027e054eb4ea1517f46bd69407b4e85b710fe0c5",
+  "commit": "05dceda76aae64768afedac07b298267909332b8",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 23016,
-      "sha256": "e1cb2b4df744e3057bc7d9a3e055be221c6de0192b7a2dff099a333188380833"
+      "bytes": 21209,
+      "sha256": "d43df926a076b6c5d85fa42d456bdfde8fd0a995e76cc7fba2ae46764058e09a"
     },
     {
       "path": "build.mjs",
