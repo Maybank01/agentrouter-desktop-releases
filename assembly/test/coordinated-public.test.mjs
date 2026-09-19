@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { verifyCoordinatedPublicRelease } from '../coordinated-public.mjs'
+import { loadSigningPolicy } from '../coordinated/windows-signing.mjs'
 
 function fixture() {
   const base = 'https://github.com/Maybank01/agentrouter-desktop-releases/releases'
@@ -40,4 +41,13 @@ test('test-only installers, a stale public latest and changed public bytes canno
   f.release.tag_name = 'v3.0.5'
   f.bodies.set('latest.yml', Buffer.from('version: 9.9.9'))
   await assert.rejects(verifyCoordinatedPublicRelease(f.input, f.receipt, f.fetcher))
+})
+
+test('a self-signed claim without the public signed manifest or native signature acceptance is rejected', async () => {
+  const f = fixture(), policy = loadSigningPolicy()
+  f.input.signing = { mode: policy.mode, certificateSha256: policy.certificateSha256 }
+  f.receipt.signing = f.input.signing
+  await assert.rejects(verifyCoordinatedPublicRelease(f.input, f.receipt, f.fetcher))
+  f.receipt.installedSignedUpdate = { passed: true, nativeSignatureVerificationExecuted: true }
+  await assert.rejects(verifyCoordinatedPublicRelease(f.input, f.receipt, f.fetcher), /signed update manifest/)
 })

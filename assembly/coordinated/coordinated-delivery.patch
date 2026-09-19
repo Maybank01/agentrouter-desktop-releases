@@ -729,13 +729,53 @@ index f78d922..7587a17 100644
      hostProtocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
      nodeVersion: value.nodeVersion,
 diff --git a/apps/desktop/src/update-coordinator.ts b/apps/desktop/src/update-coordinator.ts
-index c31dcc3..d52307b 100644
+index c31dcc3..f3700fd 100644
 --- a/apps/desktop/src/update-coordinator.ts
 +++ b/apps/desktop/src/update-coordinator.ts
-@@ -80,8 +80,8 @@ export class DesktopUpdateCoordinator {
+@@ -1,10 +1,11 @@
+ /** One Electron release stream for the version-bound shell and dsh seed. */
+ 
+-import { existsSync } from 'node:fs'
++import { existsSync, readFileSync } from 'node:fs'
+ import { join } from 'node:path'
+ import { app } from 'electron'
+ import electronUpdater, { type AppUpdater } from 'electron-updater'
+ import type { DesktopUpdateState } from './ipc.ts'
++import { configurePinnedUpdater } from './agentrouter-update-signature.mjs'
+ const { autoUpdater } = electronUpdater
+ 
+ /** Checks, downloads, and installs one complete Desktop release. */
+@@ -12,6 +13,7 @@ export class DesktopUpdateCoordinator {
+   private availableVersion: string | undefined
+   private checkOperation: Promise<DesktopUpdateState> | undefined
+   private installOperation: Promise<DesktopUpdateState> | undefined
++  private readonly signatureCheck: ReturnType<typeof configurePinnedUpdater> | undefined
+ 
+   /**
+    * @param publish - state sink for every desktop window.
+@@ -29,6 +31,13 @@ export class DesktopUpdateCoordinator {
+   ) {
+     this.updater.autoDownload = false
+     this.updater.autoInstallOnAppQuit = false
++    // The release adapter embeds the public update key in the packaged asar.
++    // Ordinary upstream and unsigned loopback candidates have no such policy.
++    const signaturePath = app.isPackaged ? join(app.getAppPath(), 'update-signing.json') : undefined
++    if (signaturePath !== undefined && existsSync(signaturePath)) {
++      const signing = JSON.parse(readFileSync(signaturePath, 'utf8'))
++      this.signatureCheck = configurePinnedUpdater(this.updater, signing, () => this.availableVersion)
++    }
+   }
+ 
+   /** Check the configured Desktop release stream and retain an available version. */
+@@ -78,11 +87,13 @@ export class DesktopUpdateCoordinator {
+     }
+     this.publish({ phase: 'installing', version })
      try {
-       await this.updater.downloadUpdate()
+-      await this.updater.downloadUpdate()
 -      this.availableVersion = undefined
++      await this.signatureCheck?.beforeDownload()
++      const downloaded = await this.updater.downloadUpdate()
++      await this.signatureCheck?.afterDownload(downloaded)
        const ready = this.publish({ phase: 'ready', version })
        await this.beforeRestart()
 -      this.updater.quitAndInstall(false, true)
@@ -743,6 +783,7 @@ index c31dcc3..d52307b 100644
 +      this.availableVersion = undefined
        return ready
      } catch (error) {
+       return this.publish({
 diff --git a/apps/desktop/tests/host-process.spec.ts b/apps/desktop/tests/host-process.spec.ts
 index d3a08d7..fdc9cc1 100644
 --- a/apps/desktop/tests/host-process.spec.ts

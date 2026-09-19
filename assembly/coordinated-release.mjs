@@ -7,6 +7,8 @@ import { basename, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { root } from './lib.mjs'
 import { verifyCoordinatedPublicRelease } from './coordinated-public.mjs'
+import { loadSigningPolicy, inspectWindowsSignature } from './coordinated/windows-signing.mjs'
+import { manifestName, verifyUpdateManifest, verifyUpdateFile } from './coordinated/update-signature.mjs'
 
 const repo = 'Maybank01/agentrouter-desktop-releases'
 const adapter = join(root, 'assembly/coordinated')
@@ -20,6 +22,8 @@ assert.equal(process.env.GITHUB_REPOSITORY, repo)
 assert.equal(process.env.GITHUB_REF, 'refs/heads/main')
 assert.equal(process.env.GITHUB_EVENT_NAME, 'workflow_dispatch')
 const input = json(join(adapter, 'release.json'))
+const policy = input.signing?.mode === 'self-signed' ? loadSigningPolicy() : undefined
+if (policy) assert.equal(input.signing.certificateSha256, policy.certificateSha256)
 assert.equal(input.candidateOnly, false, 'The reviewed product release is still candidate-only')
 const tag = `v${input.productVersion}`
 assert.match(tag, /^v\d+\.\d+\.\d+$/)
@@ -29,12 +33,18 @@ const phase = process.argv[2]
 const path = resolve(process.argv[3])
 
 function verifySignature(file) {
-  const signature = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    '$s = Get-AuthenticodeSignature -LiteralPath $env:AGENTROUTER_VERIFY_FILE; @{ status = [string]$s.Status; subject = $s.SignerCertificate.Subject; timestamp = $s.TimeStamperCertificate.Subject } | ConvertTo-Json -Compress'],
-  { env: { ...process.env, AGENTROUTER_VERIFY_FILE: file }, encoding: 'utf8', windowsHide: true }))
-  assert.equal(signature.status, 'Valid')
-  assert.ok(signature.timestamp)
-  return signature
+  return inspectWindowsSignature(file, policy)
+}
+async function verifySignedAssets(directory, receipt) {
+  if (!policy) return undefined
+  assert.deepEqual(receipt.signing, input.signing)
+  assert.equal(receipt.assets.filter(file => file.name === manifestName).length, 1)
+  const manifest = verifyUpdateManifest(json(join(directory, manifestName)), policy, input.productVersion)
+  for (const file of receipt.assets.filter(file => file.name !== manifestName)) {
+    const verified = await verifyUpdateFile(manifest, join(directory, file.name), file.name)
+    assert.deepEqual(verified, file)
+  }
+  return manifest
 }
 if (phase === 'stage') {
   const installer = json(path)
@@ -46,21 +56,40 @@ if (phase === 'stage') {
   assert.deepEqual(accepted.plugin, input.plugin)
   assert.equal(installer.testOnly, false)
   assert.equal(installer.signed, true)
-  assert.equal(installer.signature.status, 'Valid')
-  assert.equal(installer.runtimeSignature.status, 'Valid')
+  if (!policy) {
+    assert.equal(installer.signature.status, 'Valid')
+    assert.equal(installer.runtimeSignature.status, 'Valid')
+  }
   assert.equal(installer.productVersion, input.productVersion)
   assert.equal(installer.patchSha256, patchSha256)
   assert.deepEqual(installer.plugin, input.plugin)
   assert.equal(installer.feed, input.updateUrl)
+  let installedSignedUpdate
+  if (policy) {
+    const upgrade = json(process.env.SIGNED_UPGRADE_RECEIPT)
+    assert.equal(upgrade.passed, true); assert.equal(upgrade.signed, true)
+    assert.equal(upgrade.nativeUpdaterExecuted, true)
+    assert.equal(upgrade.nativeSignatureVerificationExecuted, true)
+    assert.equal(upgrade.rootTrustInstalled, false)
+    assert.equal(upgrade.productVersion, input.productVersion)
+    assert.equal(upgrade.patchSha256, patchSha256)
+    assert.deepEqual(upgrade.plugin, input.plugin)
+    assert.equal(upgrade.targetInstaller.testOnly, false)
+    assert.deepEqual(upgrade.targetInstaller.assets, installer.assets)
+    installedSignedUpdate = { passed: true, nativeUpdaterExecuted: true, nativeSignatureVerificationExecuted: true,
+      installerRestartedApp: upgrade.installerRestartedApp, rootTrustInstalled: false,
+      signedInstallerSha256: installer.assets.find(file => file.name.endsWith('.exe')).sha256 }
+  }
   const receipt = { schemaVersion: 1, sourceCommit: process.env.GITHUB_SHA, adapterSource: source,
     input, upstreamCommit: installer.upstreamCommit, patchSha256, signed: true, testOnly: false,
+    signing: installer.signing, installedSignedUpdate,
     signature: installer.signature, runtimeSignature: installer.runtimeSignature, assets: installer.assets,
     installedCandidate: accepted }
   const output = installer.output
   const receiptPath = join(output, 'release-receipt.json')
   writeJson(receiptPath, receipt)
   const notes = join(output, 'RELEASE_NOTES.md')
-  writeFileSync(notes, `AgentRouter ${input.productVersion}\n\nDSH ${input.dshVersion}; ${input.plugin.name}@${input.plugin.version}.\n\nOne product update installs the verified client and plugin together. Independent DSH installations continue to update the plugin separately.\n`)
+  writeFileSync(notes, `AgentRouter ${input.productVersion}\n\nDSH ${input.dshVersion}; ${input.plugin.name}@${input.plugin.version}.\n\n一次产品升级同步更新客户端与插件。独立安装的 DSH 仍可单独更新同一个 npm 插件。\n${policy ? '\n安装包使用 AgentRouter 自签证书，Windows 首次安装可能显示未知发布者或 SmartScreen 提示。自动更新使用应用内固定公钥验证完整安装包，无需导入根证书。自签不代表 Windows 公共信任认证。\n' : ''}`)
   const checksums = join(output, 'SHA256SUMS.txt')
   writeFileSync(checksums, installer.assets.map(file => `${file.sha256}  ${file.name}\n`).join(''))
   for (const file of installer.assets) {
@@ -68,6 +97,7 @@ if (phase === 'stage') {
     const bytes = readFileSync(join(output, file.name))
     assert.equal(bytes.length, file.bytes); assert.equal(hash(bytes), file.sha256)
   }
+  await verifySignedAssets(output, installer)
   verifySignature(installer.installer)
   // Draft assets stay out of latest and the product feed until the second
   // disposable worker has installed and accepted these exact signed bytes.
@@ -91,7 +121,8 @@ if (phase === 'stage') {
   assert.equal(installer.length, 1)
   const executable = join(path, installer[0].name)
   const signature = verifySignature(executable)
-  assert.equal(signature.subject, receipt.signature.subject)
+  assert.equal(signature.certificateSha256, receipt.signature.certificateSha256)
+  const signedManifest = await verifySignedAssets(path, receipt)
   const feed = load(readFileSync(join(path, 'latest.yml'), 'utf8'))
   assert.equal(feed.version, input.productVersion)
   assert.equal(feed.files[0].url, installer[0].name)
@@ -104,7 +135,15 @@ if (phase === 'stage') {
     '$p = Start-Process -FilePath $env:AGENTROUTER_TEST_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:AGENTROUTER_TEST_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "NSIS failed: $($p.ExitCode)" }'],
   { env: testEnv, windowsHide: true, stdio: 'inherit', timeout: 300000 })
   const installedExe = join(installed, 'AgentRouter.exe')
-  assert.equal(verifySignature(installedExe).subject, signature.subject)
+  assert.equal(verifySignature(installedExe).certificateSha256, signature.certificateSha256)
+  if (signedManifest) {
+    await verifyUpdateFile(signedManifest, installedExe, 'AgentRouter.exe')
+    const { extractFile } = require('@electron/asar')
+    const embedded = JSON.parse(extractFile(join(installed, 'resources/app.asar'), 'update-signing.json').toString('utf8'))
+    assert.deepEqual(embedded.policy, policy)
+    assert.equal(embedded.testOnly, false)
+    assert.equal(embedded.feed, input.updateUrl)
+  }
   const output = join(work, 'evidence'); mkdirSync(output)
   const candidate = join(work, 'installed.json')
   writeJson(candidate, { input, executable: installedExe, output, pluginSha256: input.plugin.sha256, patchSha256 })
@@ -114,11 +153,13 @@ if (phase === 'stage') {
   assert.equal(acceptance.passed, true)
   writeJson(join(path, 'signed-installed-acceptance.json'), { ...acceptance,
     installerExecuted: true, signedInstallerSha256: installer[0].sha256,
-    signature, sourceCommit: process.env.GITHUB_SHA, input, patchSha256 })
+    signature, signing: input.signing, installedSignedUpdate: receipt.installedSignedUpdate,
+    sourceCommit: process.env.GITHUB_SHA, input, patchSha256 })
   console.log(JSON.stringify({ tag, acceptedSignedInstaller: true }))
 } else if (phase === 'publish') {
   const acceptance = json(join(path, 'signed-installed-acceptance.json'))
   const receipt = json(join(path, 'release-receipt.json'))
+  await verifySignedAssets(path, receipt)
   assert.equal(acceptance.passed, true); assert.equal(acceptance.installerExecuted, true)
   assert.equal(acceptance.sourceCommit, process.env.GITHUB_SHA)
   assert.deepEqual(acceptance.input, input)

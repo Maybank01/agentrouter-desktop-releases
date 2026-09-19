@@ -16,6 +16,15 @@ const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const writeJson = (path, data) => writeFileSync(path, JSON.stringify(data, null, 2) + '\n')
 const targetFile = resolve(process.argv[2])
 const target = json(targetFile)
+const signedReceiptFile = process.argv.find(value => value.startsWith('--signed-installer='))?.slice('--signed-installer='.length)
+const signedTarget = signedReceiptFile ? json(resolve(signedReceiptFile)) : undefined
+if (signedTarget) {
+  assert.equal(signedTarget.signed, true)
+  assert.equal(signedTarget.testOnly, false)
+  assert.equal(signedTarget.productVersion, target.input.productVersion)
+  assert.equal(signedTarget.patchSha256, target.patchSha256)
+  assert.deepEqual(signedTarget.plugin, target.input.plugin)
+}
 const work = mkdtempSync(join(process.env.RUNNER_TEMP, 'agentrouter-installed-'))
 const env = { ...process.env, AGENTROUTER_COORDINATED_WORK_DIR: join(work, 'candidates') }
 async function run(exe, args, name, overrides = {}) {
@@ -36,7 +45,13 @@ const lastResult = log => JSON.parse(readFileSync(log, 'utf8').trim().split(/\r?
 const baselineInput = json(join(directory, 'installer-baseline.json'))
 assert.equal(baselineInput.dshVersion, target.input.dshVersion)
 assert.notEqual(baselineInput.plugin.version, target.input.plugin.version)
-const baselineFile = lastResult(await node('build.mjs', [join(directory, 'installer-baseline.json')], 'build-baseline')).candidate
+let baselineInputFile = join(directory, 'installer-baseline.json')
+if (signedTarget) {
+  baselineInput.signing = target.input.signing
+  baselineInputFile = join(work, 'signed-baseline-input.json')
+  writeJson(baselineInputFile, baselineInput)
+}
+const baselineFile = lastResult(await node('build.mjs', [baselineInputFile], 'build-baseline')).candidate
 const baseline = json(baselineFile)
 const files = new Map()
 const requests = []
@@ -57,8 +72,8 @@ const install = (installer, destination, name) => run('powershell.exe', ['-NoPro
   '$ErrorActionPreference = "Stop"; $p = Start-Process -FilePath $env:AGENTROUTER_TEST_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:AGENTROUTER_TEST_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "NSIS failed: $($p.ExitCode)" }'], name,
 { AGENTROUTER_TEST_INSTALLER: installer, AGENTROUTER_TEST_INSTALL_DIR: destination })
 try {
-  const baselinePackage = json(lastResult(await node('package-installer.mjs', [baselineFile, '--test-feed=' + feed], 'package-baseline')).installerReceipt)
-  const targetPackageFile = lastResult(await node('package-installer.mjs', [targetFile, '--test-feed=' + feed], 'package-target')).installerReceipt
+  const baselinePackage = json(lastResult(await node('package-installer.mjs', [baselineFile, (signedTarget ? '--signed-test-feed=' : '--test-feed=') + feed], 'package-baseline')).installerReceipt)
+  const targetPackageFile = signedReceiptFile ?? lastResult(await node('package-installer.mjs', [targetFile, '--test-feed=' + feed], 'package-target')).installerReceipt
   const targetPackage = json(targetPackageFile)
   for (const receipt of [baselinePackage, targetPackage]) for (const file of receipt.assets) files.set(file.name, { path: join(receipt.output, file.name), bytes: file.bytes })
   const installed = join(work, 'installed')
@@ -73,6 +88,7 @@ try {
   const update = json(join(target.output, 'acceptance.json'))
   assert.equal(update.installerUpgrade, true)
   assert.ok(requests.includes('latest.yml') && requests.some(name => name === targetPackage.assets.find(asset => asset.name.endsWith('.exe')).name))
+  if (signedTarget) assert.ok(requests.includes('agentrouter-update.json'), 'The installed native updater must request and verify the signed manifest')
 
   const legacy = json(join(directory, 'legacy-installer.json'))
   const legacyInstaller = join(work, legacy.filename)
@@ -85,11 +101,12 @@ try {
   await node('acceptance.mjs', [installedTarget, '--legacy-executable=' + join(legacyDirectory, 'DSH Desktop.exe')], 'legacy-migration')
   const migration = json(join(target.output, 'acceptance.json'))
   assert.equal(migration.legacyProfileMigration, true)
-  const receipt = { schemaVersion: 1, passed: true, testOnly: true, signed: false,
+  const receipt = { schemaVersion: 1, passed: true, testOnly: true, signed: Boolean(signedTarget),
     productVersion: target.input.productVersion, plugin: target.input.plugin, patchSha256: target.patchSha256,
     targetInstaller: targetPackage, legacyInstaller: legacy,
     freshInstallerExecuted: true, nativeUpdaterExecuted: true, installerRestartedApp: true,
     legacyInstallerExecuted: true, publicFeedChanged: false, update, migration,
+    nativeSignatureVerificationExecuted: Boolean(signedTarget), rootTrustInstalled: false,
     feedRequests: [...new Set(requests)] }
   writeJson(join(target.output, 'installer-acceptance.json'), receipt)
   console.log(JSON.stringify({ passed: true, receipt: join(target.output, 'installer-acceptance.json') }))

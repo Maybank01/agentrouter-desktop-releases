@@ -22,30 +22,28 @@ plugins and the single product update entry. Its unsigned installers use only a
 loopback feed. Retain the run URL and final receipt; a source test or directory
 build alone is not installed acceptance.
 
-## Remaining signing configuration
+## Self-signed release configuration
 
-The September 19 inspection found no `windows-signing` Environment and no
-registered signing runner. This is the remaining external prerequisite, not an
-Actions compute-quota problem. Configure the upstream signer on a dedicated
-Windows x64 build machine, with runner labels:
-
-```text
-self-hosted, Windows, X64, agentrouter-signing
-```
-
-Restrict the `windows-signing` GitHub Environment to main and configure:
+The user selected self-signing on September 19. Standard hosted Windows workers
+use Windows SDK SignTool; no paid service or self-hosted signing runner is needed.
+The `windows-signing` Environment is restricted to main and contains:
 
 | Kind | Name | Value source |
 | --- | --- | --- |
-| Variable | `DSH_DESKTOP_WINDOWS_CER_FILE` | Absolute path to the public code-signing certificate on that worker |
-| Variable | `DSH_DESKTOP_WINDOWS_SIGNTOOL` | Absolute path to its upstream-compatible SignTool |
-| Variable | `DSH_DESKTOP_WINDOWS_KEY_CONTAINER` | The provisioned signing key container |
-| Secret | `DSH_DESKTOP_WINDOWS_TOKEN_PIN` | Signer PIN, supplied only to the packaging step |
+| Secret | `AGENTROUTER_SIGNING_PFX` | Base64-encoded encrypted dedicated PFX |
+| Secret | `AGENTROUTER_SIGNING_PASSWORD` | Its password, available only during import |
 
-The existing adapter uses upstream SafeNet signing. Another signing service
-needs an explicit narrow signer integration and the same Authenticode and
-timestamp acceptance. Self-signed certificates do not establish trusted Windows
-publication. No certificate, PIN or private key belongs in the repository.
+Only the public certificate and key are committed in `windows-signing.json`.
+The PFX is imported into CurrentUser/My and deleted; an always-run cleanup removes
+the temporary key. Root and TrustedPublisher stores are never modified.
+
+The app embeds the public key in asar and uses electron-updater's existing
+verification hook to check `agentrouter-update.json` and the full installer bytes,
+including cached downloads. Receipt fields retain the actual Authenticode status
+and explicitly distinguish self-signing from public Windows trust. Windows may
+show an initial installation warning; the download page and release notes say so.
+Keep the stable key; a future rotation needs a bridge release signed by the old
+key before retiring it. A broad workstation GitHub credential is not a CI secret.
 
 ## Publish and verify the same signed bytes
 
@@ -55,7 +53,8 @@ After the accepted product input has `candidateOnly: false` and signing works:
 gh workflow run release.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f delivery=coordinated -F publish=true
 ```
 
-The workflow repeats candidate acceptance, signs the product, stages a draft,
+The workflow repeats candidate acceptance, signs the product, verifies a native
+signed update/restart without installing a root certificate, then stages a draft,
 then installs those exact signed bytes on a separate hosted Windows worker.
 Only then does it publish the draft. Its final anonymous check verifies the
 installer, blockmap, updater feed and both receipts. The website uses
