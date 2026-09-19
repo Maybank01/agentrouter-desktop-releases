@@ -11,7 +11,10 @@ import { manifestName, validateSigningPolicy, verifyUpdateManifest, verifyUpdate
 const directory = fileURLToPath(new URL('.', import.meta.url))
 const execute = promisify(execFile)
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
-const ps = (command, env = {}) => JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+// A fresh hosted worker may not have registered the Cert: provider yet. Load
+// this PowerShell version's security module explicitly, including under pwsh.
+const securityModule = 'Import-Module (Join-Path $PSHOME "Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1"); '
+const ps = (command, env = {}) => JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference="Stop"; ' + securityModule + command], {
   env: { ...process.env, ...env }, encoding: 'utf8', windowsHide: true, timeout: 60000,
 }))
 

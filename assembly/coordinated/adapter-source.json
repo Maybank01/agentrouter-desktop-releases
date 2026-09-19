@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "3aa083f219dc575f6bd7e730460d398091fd4be3",
+  "commit": "e5a0af089fb9ee5f97871bc035836222cbb9c923",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -92,8 +92,8 @@
     },
     {
       "path": "windows-signing.mjs",
-      "bytes": 5903,
-      "sha256": "6981a1339973360afc1432bbee7d62a65d26de46351d78b41d0dfb151ced6aa8"
+      "bytes": 6249,
+      "sha256": "cd5b80b378bcb60e9c52f4a61c4fbd77246f7c325e7c9ffcabf42109f58287c8"
     },
     {
       "path": "windows-signing.json",
@@ -102,8 +102,8 @@
     },
     {
       "path": "sign-manifest.ps1",
-      "bytes": 756,
-      "sha256": "cfeffb2138ec0395a3e012bd6e5bbe5de1ab952b2c948cd348cfa73e7dbd1d27"
+      "bytes": 865,
+      "sha256": "69c7a857d5f0fcd9a3dd30f9b2287abbb4747c0a9ac645e8c823139a6b446273"
     },
     {
       "path": "import-signing-key.ps1",

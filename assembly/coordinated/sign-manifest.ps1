@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')
 $thumbprint = $env:AGENTROUTER_SIGNING_CERT_THUMBPRINT
 if ($thumbprint -notmatch '^[A-Fa-f0-9]{40}$') { throw 'Missing signing certificate identity' }
 $cert = Get-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint"
