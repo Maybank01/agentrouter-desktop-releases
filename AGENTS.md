@@ -20,7 +20,16 @@ plugin source or DSH core/UI forks are permitted here.
 Keep the historical community assembly and releases. New installer tests execute
 only on disposable hosted Windows workers and use unsigned loopback-only feeds.
 Formal coordinated publication requires an explicit main dispatch, a non-candidate
-release input, configured upstream signing and installed acceptance of signed bytes.
+release input, configured signing and installed acceptance of signed bytes.
+2026-09-19 user decision: use a self-signed certificate. The `windows-signing`
+Environment is restricted to main; disposable hosted Windows signs with its
+encrypted PFX secrets and removes its temporary CurrentUser/My key afterward.
+The exported adapter pins the public update key and verifies a signed full-file
+manifest through electron-updater's supported hook. Preserve that verification,
+do not install trusted roots, and label the release self-signed rather than
+publicly trusted. Native signed upgrade and separate installation of the same
+final bytes are mandatory before publishing. Unsigned or signed loopback test
+installers are never promoted or uploaded as release assets.
 Do not promote test installers or redirect third-party clients to this feed.
 
 Product plugin validation may run independently on public hosted Windows workers

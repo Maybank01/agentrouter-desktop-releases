@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "780a59627ee9b1540c34ee63d44b721e3e7cff9b",
+  "commit": "3aa083f219dc575f6bd7e730460d398091fd4be3",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -17,13 +17,13 @@
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 58635,
-      "sha256": "028255e3099af62c54a54a06d8fbade1d13566832cb0e91993ff68be6c5092be"
+      "bytes": 60622,
+      "sha256": "9932612ba86836c11dfc09e467352771d89a250a56c98791dd1fc68155c26a95"
     },
     {
       "path": "installer-acceptance.mjs",
-      "bytes": 6704,
-      "sha256": "02e8d04e08957f8420ad92ebb80238c4ec93f58ca85720e7a19d41061228a30e"
+      "bytes": 7766,
+      "sha256": "342fe5262b964f5f4d9fb802559678977fd665e0e4de64a318d3687c1ebf46c1"
     },
     {
       "path": "installer-baseline.json",
@@ -37,8 +37,8 @@
     },
     {
       "path": "package-installer.mjs",
-      "bytes": 5420,
-      "sha256": "b94bdf5c48236d15de65ca8b31bfbd15fe1e79751794c0a27dd21191970982b5"
+      "bytes": 6527,
+      "sha256": "fc39fb884f745946a176fe198dbdd4bdce7f18326a7e33736fe7d80224fc15fd"
     },
     {
       "path": "package.json",
@@ -52,13 +52,13 @@
     },
     {
       "path": "prepare.mjs",
-      "bytes": 2138,
-      "sha256": "74e4de21dc4e3c68ec4c94984c22e1d831f96c8c92c84469e38405f4881ea64b"
+      "bytes": 2430,
+      "sha256": "98889d9291d6be5d819fd8fd7ef802f3bc4b77f41fdb291015920cf0a08c9ebc"
     },
     {
       "path": "release.json",
-      "bytes": 570,
-      "sha256": "cfff8c50397ecb07bb73c89686a06433e4c16dae887fcb4fbddad49eea28b095"
+      "bytes": 710,
+      "sha256": "885c7cf9414bc07f1fb5e889f7816d4eda864e673d6bea7ce9866bedd5e022c0"
     },
     {
       "path": "store-migration-acceptance.mjs",
@@ -67,8 +67,8 @@
     },
     {
       "path": "test.mjs",
-      "bytes": 534,
-      "sha256": "86ae87b3379d89e3a4e4e64f6daaf3caf0939288ef8184944e953219d769cb93"
+      "bytes": 693,
+      "sha256": "b938c8d7a96b2d7f3e2381cee42998a619e9416b114d10a7dd19eb017014c39d"
     },
     {
       "path": "upstream.lock.json",
@@ -79,6 +79,36 @@
       "path": "vitest.config.mjs",
       "bytes": 219,
       "sha256": "675cebd8c8a790fe56df8c4aa37ffe8cc0558610b6660f47aba809c37e9b9624"
+    },
+    {
+      "path": "update-signature.mjs",
+      "bytes": 6241,
+      "sha256": "4bf6647a77751f470f92a0d86187177fac2838942816b486027de785c5300ab1"
+    },
+    {
+      "path": "update-signature.test.mjs",
+      "bytes": 4297,
+      "sha256": "efa6ae8e4b8747ef6ccaa68b89b5ed4fafc77e430c71f061de69d42520962171"
+    },
+    {
+      "path": "windows-signing.mjs",
+      "bytes": 5903,
+      "sha256": "6981a1339973360afc1432bbee7d62a65d26de46351d78b41d0dfb151ced6aa8"
+    },
+    {
+      "path": "windows-signing.json",
+      "bytes": 2373,
+      "sha256": "c76c1c84fcaaf08a904af37f268dcaf8a2d4335d089c95d60d3060891a7fe21a"
+    },
+    {
+      "path": "sign-manifest.ps1",
+      "bytes": 756,
+      "sha256": "cfeffb2138ec0395a3e012bd6e5bbe5de1ab952b2c948cd348cfa73e7dbd1d27"
+    },
+    {
+      "path": "import-signing-key.ps1",
+      "bytes": 1843,
+      "sha256": "21cd8d3421001ee943816a339e7f55b273e343e012193b028d09c80c012829d0"
     }
   ]
 }

@@ -1,7 +1,7 @@
 /** Source assembly only. Never updates an installed application or a feed. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,6 +24,9 @@ export function prepareSource() {
   const patch = join(directory, lock.patch)
   git(source, 'apply', '--check', patch)
   git(source, 'apply', patch)
+  // One shared verifier is bundled into the native main process and also used
+  // by independent release acceptance. It is part of the exported adapter.
+  copyFileSync(join(directory, 'update-signature.mjs'), join(source, 'apps/desktop/src/agentrouter-update-signature.mjs'))
   const changes = git(source, 'diff', '--name-only').split('\n')
   assert.ok(changes.length > 0 && changes.every(path => path.startsWith('apps/desktop/') || path === 'apps/desktop-host/src/index.ts'))
   symlinkSync(join(directory, 'node_modules'), join(source, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
