@@ -22,7 +22,17 @@ test('optional Desktop publication is manually dispatched on main and never foll
   assert.deepEqual(readdirSync(directory).sort(), ['ci.yml', 'plugin-validation.yml', 'release.yml'])
   const ci = readFileSync(join(directory, 'ci.yml'), 'utf8')
   assert.match(ci, /contents: read/)
-  assert.doesNotMatch(ci, /npm publish|PUBLIC_RELEASE_APP/u)
+  assert.match(ci, /workflow_dispatch:/)
+  assert.match(ci, /runs-on: ubuntu-latest/)
+  assert.match(ci, /runs-on: windows-2025/)
+  assert.equal((ci.match(/persist-credentials: false/g) ?? []).length, 2)
+  for (const command of ['npm test', 'git diff --check',
+    'npm ci --ignore-scripts --prefix assembly/coordinated',
+    'node assembly/coordinated/test.mjs', 'node assembly/coordinated/store-migration-acceptance.mjs',
+    'node assembly/coordinated-candidate.mjs']) assert.ok(ci.includes(command), command)
+  assert.match(ci, /github\.workflow_sha/)
+  assert.match(ci, /adapter-source\.json/)
+  assert.doesNotMatch(ci, /npm publish|PUBLIC_RELEASE_APP|secrets\.|contents: write|workflow_call:|pull_request_target:|upload-artifact|actions\/cache|self-hosted|repository:\s*Maybank01\//u)
 
   // Preserve the historical community lane's contract; the new product lane
   // below is separately bound to the exported source and installed acceptance.
