@@ -12,6 +12,10 @@ on:
         description: Publish the reviewed release after installed acceptance
         type: boolean
         default: false
+      resume_signed_run:
+        description: Resume an existing signed release from this completed run without rebuilding
+        type: string
+        default: ''
       force:
         description: Rebuild the currently locked version
         type: boolean
@@ -241,7 +245,7 @@ jobs:
 
   coordinated:
     name: Accept coordinated installers before signing
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.resume_signed_run == ''
     runs-on: windows-2025
     timeout-minutes: 60
     permissions:
@@ -347,24 +351,39 @@ jobs:
   coordinated_publish:
     name: Install signed bytes before making them available
     needs: coordinated_sign
+    if: always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && (needs.coordinated_sign.result == 'success' || inputs.resume_signed_run != '')
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24.15.0
+      - run: npm test
       - run: npm ci --ignore-scripts --prefix assembly/coordinated
       - name: Download the exact draft assets
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.coordinated_sign.outputs.tag }}
-        run: gh release download "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir .local/signed-release
+        run: |
+          if (!$env:RELEASE_TAG) {
+            $release = Get-Content assembly/coordinated/release.json -Raw | ConvertFrom-Json
+            $env:RELEASE_TAG = "v$($release.productVersion)"
+          }
+          gh release download "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir .local/signed-release
+      - name: Validate the original signed run before resuming
+        if: inputs.resume_signed_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_SIGNED_RUN: ${{ inputs.resume_signed_run }}
+        run: node assembly/coordinated-recovery.mjs .local/signed-release
       - name: Verify Authenticode and install the signed product
         run: node assembly/coordinated-release.mjs accept .local/signed-release
       - name: Publish the already installed bytes
