@@ -1,8 +1,28 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 import { verifyCoordinatedPublicRelease } from '../coordinated-public.mjs'
 import { loadSigningPolicy } from '../coordinated/windows-signing.mjs'
+
+test('a fresh publisher process can initialize TLS after reading the signing certificate', () => {
+  // node:test may already initialize TLS. A fresh process reproduces the
+  // certificate-first initialization order used by the release publisher.
+  const script = `
+    import ${JSON.stringify(new URL('../coordinated-public.mjs', import.meta.url).href)};
+    import { loadSigningPolicy } from ${JSON.stringify(new URL('../coordinated/windows-signing.mjs', import.meta.url).href)};
+    loadSigningPolicy();
+    const { connect } = await import('node:tls');
+    const { Socket } = await import('node:net');
+    const socket = connect({ socket: new Socket(), servername: 'localhost' });
+    socket.destroy();
+  `
+  // The unconnected socket exercises secure-context construction without
+  // making any network request or changing certificate trust.
+  execFileSync(process.execPath, ['--input-type=module'], {
+    input: script, encoding: 'utf8', windowsHide: true, timeout: 15000,
+  })
+})
 
 function fixture() {
   const base = 'https://github.com/Maybank01/agentrouter-desktop-releases/releases'

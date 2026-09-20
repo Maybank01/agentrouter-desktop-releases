@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict'
+// Node 24.15.0 can cache incomplete TLS exports when X509Certificate's legacy
+// conversion initializes internal TLS first. Initialize the public module
+// before inspecting signing policy so later anonymous HTTPS checks work.
+import 'node:tls'
 import { createHash } from 'node:crypto'
 import { loadSigningPolicy } from './coordinated/windows-signing.mjs'
 import { manifestName, verifyUpdateManifest } from './coordinated/update-signature.mjs'
