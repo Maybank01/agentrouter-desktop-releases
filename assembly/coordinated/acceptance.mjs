@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -185,12 +185,48 @@ const verifyMigratedGraph = profile => {
   assert.match(load(readFileSync(join(profile, 'node_modules/.modules.yaml'), 'utf8')).packageManager, /^pnpm@11\./)
   assert.equal(json(join(profile, 'node_modules/dsh-image-viewer/package.json')).version, '0.1.0-beta.11')
 }
+const prepareLegacyMigrationCases = async profile => {
+  assert.equal(app, undefined, 'Close the old isolated app before preparing its migration')
+  assert.ok(resolve(profile).startsWith(resolve(home) + sep))
+  const viewer = 'dsh-image-viewer'
+  assert.equal(json(join(profile, 'package.json')).dependencies[viewer], '0.1.0-beta.11')
+  const response = await fetch('https://registry.npmjs.org/dsh-image-viewer/-/dsh-image-viewer-0.1.0-beta.11.tgz',
+    { signal: AbortSignal.timeout(30000) })
+  assert.equal(response.status, 200)
+  const bytes = Buffer.from(await response.arrayBuffer())
+  assert.equal('sha512-' + createHash('sha512').update(bytes).digest('base64'),
+    'sha512-Ea0u5MKSNYvyazirUM8i+o8B4fz9Uv6B+Cl4o39QJFXVe/FT/Dphv1kwzNr6u5mp8Do2GviV0isKuTQ17Z2WiQ==')
+  const tarball = join(state, 'legacy-viewer.tgz')
+  writeFileSync(tarball, bytes)
+  const commandEnv = { ...env, CI: '1' }
+  for (const name of Object.keys(commandEnv)) if (/^(?:npm|pnpm|corepack)_/i.test(name)) delete commandEnv[name]
+  const npmrc = join(state, 'legacy-npmrc')
+  writeFileSync(npmrc, 'registry=https://registry.npmjs.org/\n')
+  execFileSync(process.execPath, [join(directory, 'node_modules/pnpm10/bin/pnpm.cjs'),
+    `--config.store-dir=${join(state, 'legacy-pnpm-store')}`, `--config.userconfig=${npmrc}`,
+    'add', tarball, '--save-exact', '--lockfile-only', '--ignore-scripts', '--ignore-pnpmfile'],
+  { cwd: profile, env: commandEnv, encoding: 'utf8', windowsHide: true, timeout: 180000, maxBuffer: 8 * 1024 * 1024 })
+  const manifestPath = join(profile, 'package.json')
+  const manifest = json(manifestPath)
+  assert.match(manifest.dependencies[viewer], /^file:/)
+  assert.equal(json(join(profile, 'agentrouter-preinstalled.json')).package, '@agentrouter-top/dsh-codex')
+  manifest.dsh.profile.bundles.push('@agentrouter-top/dsh-plugin')
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+  // Simulate an old installation whose archived file and module fallback are no
+  // longer present. Move only entries inside this disposable Home, never a target
+  // reached by following a module junction into the previous executable.
+  const modules = join(profile, 'node_modules')
+  if (existsSync(modules)) renameSync(modules, join(state, 'legacy-profile-modules'))
+  renameSync(tarball, join(state, 'retained-legacy-viewer.tgz'))
+  return { manifest: readFileSync(manifestPath, 'utf8'), lock: readFileSync(join(profile, 'pnpm-lock.yaml'), 'utf8') }
+}
 try {
   await launch(baseline)
   await page.screenshot({ path: join(state, 'fresh-install.png') })
   await close()
   const profile = join(home, 'profiles/desktop')
-  const legacyManifest = legacyExecutable ? readFileSync(join(profile, 'package.json'), 'utf8') : undefined
+  let legacyManifest = legacyExecutable ? readFileSync(join(profile, 'package.json'), 'utf8') : undefined
+  let legacyLock
   const legacyViewer = legacyExecutable ? JSON.parse(legacyManifest).dependencies['dsh-image-viewer'] : undefined
   if (legacyExecutable) baseline.input.plugin.version = JSON.parse(legacyManifest).dependencies['@agentrouter-top/dsh-codex']
   const existingPatch = existsSync(join(profile, 'cordis.patch.yml')) ? load(readFileSync(join(profile, 'cordis.patch.yml'), 'utf8')) : []
@@ -215,6 +251,11 @@ try {
   }, { timeout: 45000 }).toBe(true)
   assert.ok(modelRequests > 0)
   await close()
+  if (legacyExecutable) {
+    const prepared = await prepareLegacyMigrationCases(profile)
+    legacyManifest = prepared.manifest
+    legacyLock = prepared.lock
+  }
   if (candidate) {
     if (!legacyExecutable) assert.equal(baseline.input.dshVersion, candidate.input.dshVersion, 'This test must update the plugin while retaining DSH.')
     assert.notEqual(baseline.input.plugin.version, candidate.input.plugin.version)
@@ -260,7 +301,9 @@ try {
     if (legacyExecutable) {
       const migration = json(join(profile, 'agentrouter-legacy-migration.json'))
       assert.equal(readFileSync(join(migration.backup, 'package.json'), 'utf8'), legacyManifest)
+      assert.equal(readFileSync(join(migration.backup, 'pnpm-lock.yaml'), 'utf8'), legacyLock)
       assert.equal(json(join(profile, 'node_modules/dsh-image-viewer/package.json')).version, legacyViewer)
+      assert.ok(!json(join(profile, 'package.json')).dsh.profile.bundles.includes('@agentrouter-top/dsh-plugin'))
     }
     if (migratePnpm10) verifyMigratedGraph(profile)
     assert.equal((await api('status')).connected, true)
@@ -315,7 +358,8 @@ try {
     sessionMetadataPreserved: !!candidate, existingConversationContinued: !!candidate, modelRequests, singleUpdateEntry: !!candidate,
     baseline: baseline.input, target: candidate?.input, pluginSha256: candidate?.pluginSha256,
     realAccountUsed: false, nativeSessionApi: true, nativeModelHistoryRetained: !!candidate, installerUpgrade: nativeUpdate, loopbackFeedUpgrade: nativeUpdate,
-    automaticInstallerRestart: nativeUpdate, publicFeedUpgrade: false, legacyProfileMigration: !!legacyExecutable }
+    automaticInstallerRestart: nativeUpdate, publicFeedUpgrade: false, legacyProfileMigration: !!legacyExecutable,
+    legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
     thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, repeatedStartupDoesNotRebuild: migratePnpm10, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
