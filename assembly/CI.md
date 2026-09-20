@@ -47,3 +47,24 @@ CI 结果不授权 npm 发布、正式安装器签名/发布或公开 feed 切�
 
 插件私有源码的公共执行器是另一个入口 `plugin-validation.yml`，沿用其私有候选存储及
 受保护的 npm 发布器；不要把插件的跨仓库凭据或发布机制移入本适配器 CI。
+
+
+## 2026-09-20: change-scoped checks
+
+`ci.yml` always checks source boundaries/provenance. `assembly/ci-scope.mjs`
+compares the actual PR merge-base diff or push before/after diff. Documentation,
+website/public observation and private plugin execution do not require another
+installation of the unchanged Desktop. Native adapter/product inputs, signing,
+build code and unknown code still run Windows transactions, store migration and
+installed update/legacy acceptance. Manual dispatch always runs the complete path.
+A skipped Windows job means unchanged product inputs, not newly accepted bytes.
+
+The private plugin now has Dev integration, with fast source checks per module
+and a frozen Windows candidate per release batch. This repository's executor
+admits a fixed commit already on private dev/main, while its own workflow and
+environment remain main-only. See the private source's docs/INTEGRATION.md.
+
+New coordinated publication compares its locked plugin with npm next before
+expensive acceptance. An intentional older-plugin maintenance release supplies
+retain_plugin_reason; this is retained with source/version/digest in the release
+receipt. Signed recovery preserves original input without chasing a newer tag.

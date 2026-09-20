@@ -55,6 +55,11 @@ async function verifySignedAssets(directory, receipt) {
 }
 if (phase === 'stage') {
   const installer = json(path)
+  const selection = JSON.parse(process.env.RELEASE_SELECTION_JSON)
+  assert.equal(selection.productVersion, input.productVersion)
+  assert.equal(selection.pluginVersion, input.plugin.version)
+  assert.equal(selection.pluginSha256, input.plugin.sha256)
+  assert.ok(selection.current || selection.retainReason?.trim())
   const accepted = JSON.parse(process.env.ACCEPTED_CANDIDATE_JSON)
   assert.equal(accepted.passed, true)
   assert.equal(accepted.nativeUpdaterExecuted, true)
@@ -88,7 +93,7 @@ if (phase === 'stage') {
       signedInstallerSha256: installer.assets.find(file => file.name.endsWith('.exe')).sha256 }
   }
   const receipt = { schemaVersion: 1, sourceCommit: process.env.GITHUB_SHA, adapterSource: source,
-    input, upstreamCommit: installer.upstreamCommit, patchSha256, signed: true, testOnly: false,
+    input, selection, upstreamCommit: installer.upstreamCommit, patchSha256, signed: true, testOnly: false,
     signing: installer.signing, installedSignedUpdate,
     signature: installer.signature, runtimeSignature: installer.runtimeSignature, assets: installer.assets,
     installedCandidate: accepted }

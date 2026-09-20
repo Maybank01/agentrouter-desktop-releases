@@ -13,6 +13,11 @@ on:
         description: Immutable private source commit (40 lowercase hex characters)
         required: true
         type: string
+      source_branch:
+        description: Reviewed private integration or release branch
+        type: choice
+        options: [main, dev]
+        default: main
       request_id:
         description: Unique request identifier from the private source dispatcher
         required: true
@@ -34,6 +39,7 @@ jobs:
     env:
       AGENTROUTER_CI_TASK: ${{ inputs.task }}
       AGENTROUTER_SOURCE_SHA: ${{ inputs.source_sha }}
+      AGENTROUTER_SOURCE_BRANCH: ${{ inputs.source_branch }}
       AGENTROUTER_CI_REQUEST_ID: ${{ inputs.request_id }}
       AGENTROUTER_EXECUTOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
       DSH_TELEMETRY_DISABLED: '1'

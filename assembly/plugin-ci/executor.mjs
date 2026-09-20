@@ -17,6 +17,8 @@ function requireValue(condition, code) {
 export function requestFromEnvironment(env) {
   requireValue(tasks.has(env.AGENTROUTER_CI_TASK), 'INVALID_TASK')
   requireValue(shaPattern.test(env.AGENTROUTER_SOURCE_SHA ?? ''), 'INVALID_SOURCE_SHA')
+  const sourceBranch = env.AGENTROUTER_SOURCE_BRANCH || 'main'
+  requireValue(['main', 'dev'].includes(sourceBranch), 'INVALID_SOURCE_BRANCH')
   requireValue(/^[a-z0-9][a-z0-9-]{5,79}$/.test(env.AGENTROUTER_CI_REQUEST_ID ?? ''), 'INVALID_REQUEST_ID')
   requireValue(env.GITHUB_REPOSITORY === executionRepository, 'INVALID_EXECUTOR')
   requireValue(env.GITHUB_REF === 'refs/heads/main', 'INVALID_EXECUTOR_REF')
@@ -30,6 +32,7 @@ export function requestFromEnvironment(env) {
     schemaVersion: 1,
     sourceRepository,
     sourceSha: env.AGENTROUTER_SOURCE_SHA,
+    sourceBranch,
     executionRepository,
     workflowPath,
     workflowSha: env.AGENTROUTER_EXECUTOR_WORKFLOW_SHA,
@@ -41,10 +44,12 @@ export function requestFromEnvironment(env) {
 }
 
 export async function authorizeSource(request, api) {
-  const compared = await api(`/repos/${sourceRepository}/compare/${request.sourceSha}...main`)
+  const branch = request.sourceBranch ?? 'main'
+  requireValue(['main', 'dev'].includes(branch), 'INVALID_SOURCE_BRANCH')
+  const compared = await api(`/repos/${sourceRepository}/compare/${request.sourceSha}...${branch}`)
   requireValue(['ahead', 'identical'].includes(compared.status)
-    && compared.merge_base_commit?.sha === request.sourceSha, 'SOURCE_NOT_ON_MAIN')
-  return { kind: 'main-ancestor' }
+    && compared.merge_base_commit?.sha === request.sourceSha, 'SOURCE_NOT_ON_REVIEWED_BRANCH')
+  return { kind: `${branch}-ancestor` }
 }
 
 // Subprocesses cannot send workflow commands through command files or inherit
@@ -184,7 +189,7 @@ export async function prepare(env) {
   for (const args of [
     ['init', '--quiet'],
     ['remote', 'add', 'origin', `https://github.com/${sourceRepository}.git`],
-    ['fetch', '--quiet', '--no-tags', '--depth=1', 'origin', 'refs/heads/main:refs/remotes/origin/main'],
+    ['fetch', '--quiet', '--no-tags', '--depth=1', 'origin', `refs/heads/${request.sourceBranch}:refs/remotes/origin/${request.sourceBranch}`],
     ['fetch', '--quiet', '--no-tags', '--depth=1', 'origin', request.sourceSha],
     ['checkout', '--quiet', '--detach', request.sourceSha],
   ]) {
@@ -246,7 +251,7 @@ export async function storeResult({ request, files, receipt, token, api }) {
   if (release) {
     let prior
     try { prior = JSON.parse(release.body) } catch { throw new Error('RESULT_TAG_COLLISION') }
-    for (const key of ['sourceRepository', 'sourceSha', 'executionRepository', 'workflowPath', 'workflowSha', 'runId', 'task', 'requestId']) {
+    for (const key of ['sourceRepository', 'sourceSha', 'sourceBranch', 'executionRepository', 'workflowPath', 'workflowSha', 'runId', 'task', 'requestId']) {
       requireValue(prior[key] === request[key], 'RESULT_TAG_COLLISION')
     }
     requireValue(release.prerelease && !release.draft, 'INVALID_RESULT_RELEASE')
