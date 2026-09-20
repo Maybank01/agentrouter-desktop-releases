@@ -43,6 +43,7 @@ if (testOnly || selfSigned) delete process.env.DSH_DESKTOP_TARGET_PLATFORM
 else process.env.DSH_DESKTOP_TARGET_PLATFORM = 'win32'
 const { createElectronBuilderConfig } = await import(pathToFileURL(join(candidate.source, 'apps/desktop/electron-builder.config.mjs')).href)
 const config = createElectronBuilderConfig(process.env, 'win32', 'x64')
+config.win = { ...config.win, icon: join(directory, 'agentrouter-icon.ico') }
 const output = join(candidate.output, signedTestFeed ? 'signed-test-installer' : testOnly ? 'test-installer' : 'installer')
 Object.assign(config, {
   // The main/preload code is already bundled; the verified runtime graph lives

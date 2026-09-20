@@ -138,6 +138,7 @@ await build({ config: false, cwd: source, entry: { preload: join(source, 'apps/d
   platform: 'node', target: 'node24', fixedExtension: false, dts: false, clean: false,
   deps: { alwaysBundle: [/.*/], neverBundle: ['electron'] }, logLevel: 'error' })
 cpSync(join(source, 'apps/desktop/renderer'), join(app, 'renderer'), { recursive: true })
+copyFileSync(join(directory, 'agentrouter-icon.png'), join(app, 'renderer/agentrouter-icon.png'))
 copyFileSync(join(source, 'LICENSE'), join(app, 'LICENSE'))
 writeJson(join(app, 'package.json'), { name: '@agentrouter/desktop', productName: 'AgentRouter',
   version: input.productVersion, main: 'lib/main.js', type: 'module', private: true })

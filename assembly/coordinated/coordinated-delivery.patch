@@ -253,10 +253,32 @@ index d057d6d..970a2b5 100644
    readonly type: 'ready'
    readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..8f1993a 100644
+index 8bc9fdc..4de7515 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
-@@ -151,4 +151,7 @@ async function main(): Promise<void> {
+@@ -80,6 +80,9 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+ }
+ 
+-function createWindow(preload: string): BrowserWindow {
++function createWindow(preload: string, title = 'AgentRouter'): BrowserWindow {
+   const window = new BrowserWindow({
++    title,
++    icon: join(app.getAppPath(), 'renderer', 'agentrouter-icon.png'),
++    autoHideMenuBar: process.platform === 'win32',
+     width: 1280,
+     height: 840,
+@@ -95,4 +98,10 @@ function createWindow(preload: string): BrowserWindow {
+     },
+   })
++  window.on('page-title-updated', (event, pageTitle) => {
++    event.preventDefault()
++    window.setTitle(pageTitle.endsWith(' — DeepSeek Harness')
++      ? `${pageTitle.slice(0, -'DeepSeek Harness'.length)}AgentRouter`
++      : title)
++  })
+   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+   window.webContents.on('will-navigate', (event, url) => {
+@@ -151,4 +160,7 @@ async function main(): Promise<void> {
    const publishUpdate = (state: DesktopUpdateState): DesktopUpdateState => {
      updateState = state
 +    const action = Menu.getApplicationMenu()?.getMenuItemById('product-update')
@@ -264,7 +286,7 @@ index 8bc9fdc..8f1993a 100644
 +      ? `${messages.installAndRestart} (${state.version})` : messages.checkUpdatesMenu
      for (const window of BrowserWindow.getAllWindows()) {
        window.webContents.send(DESKTOP_IPC.updatesState, state)
-@@ -159,5 +162,6 @@ async function main(): Promise<void> {
+@@ -159,5 +171,6 @@ async function main(): Promise<void> {
    const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
      const next = new DesktopHostProcess(resources.node, projectDir, hostInspectPort)
 -    await next.start()
@@ -272,7 +294,7 @@ index 8bc9fdc..8f1993a 100644
 +    catch (error) { await next.stop().catch(() => undefined); throw error }
      return next
    }
-@@ -215,4 +219,7 @@ async function main(): Promise<void> {
+@@ -215,4 +228,7 @@ async function main(): Promise<void> {
      publishUpdate,
      async () => {
 +      if (host !== undefined && !await host.prepareRestart()) {
@@ -280,20 +302,29 @@ index 8bc9fdc..8f1993a 100644
 +      }
        shellInstallerOwnsQuit = true
        const active = host
-@@ -273,4 +280,5 @@ async function main(): Promise<void> {
+@@ -273,4 +289,5 @@ async function main(): Promise<void> {
    const checkAndPrompt = async (manual: boolean): Promise<void> => {
      const state = await updates.check()
 +    if (!manual) return
      if (state.phase === 'error') {
        if (manual) {
-@@ -335,5 +343,5 @@ async function main(): Promise<void> {
+@@ -318,7 +335,6 @@ async function main(): Promise<void> {
+       return
+     }
+-    pluginWindow = createWindow(managementPreload)
++    pluginWindow = createWindow(managementPreload, messages.pluginWindowTitle.replace('DeepSeek Harness', 'AgentRouter'))
+     pluginWindow.setSize(900, 620)
+-    pluginWindow.setTitle(messages.pluginWindowTitle)
+     pluginWindow.once('ready-to-show', () => { pluginWindow?.show() })
+     pluginWindow.once('closed', () => { pluginWindow = undefined })
+@@ -335,5 +351,5 @@ async function main(): Promise<void> {
          click: openPluginWindow,
        },
 -      { label: messages.checkUpdatesMenu, click: () => { void checkAndPrompt(true) } },
 +      { id: 'product-update', label: messages.checkUpdatesMenu, click: () => { void checkAndPrompt(true) } },
        { type: 'separator' },
        { role: 'quit' },
-@@ -393,5 +401,20 @@ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unk
+@@ -393,5 +409,20 @@ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unk
      await writeFile(diagnosticFile, `${error instanceof Error ? error.stack ?? message : message}\n`).catch(() => undefined)
    }
 -  dialog.showErrorBox(resolveDesktopLocale(app.getLocale()).messages.startupFailed, message)

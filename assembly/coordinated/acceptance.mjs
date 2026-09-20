@@ -135,6 +135,34 @@ const launch = async receipt => {
   assert.equal(resolve(facts.userData), resolve(electronHome))
   assert.equal(facts.packaged, true)
   assert.deepEqual(errors, [])
+  if (!receipt.legacy) {
+    const window = await app.browserWindow(page)
+    const title = () => window.evaluate(window => window.getTitle())
+    await expect.poll(title).toMatch(/AgentRouter$/)
+    const originalTitle = await page.title()
+    const originalWindowTitle = await title()
+    await page.evaluate(() => { document.title = 'Native appearance acceptance — DeepSeek Harness' })
+    await expect.poll(title).toBe('Native appearance acceptance — AgentRouter')
+    await page.evaluate(value => { document.title = value }, originalTitle)
+    await expect.poll(title).toBe(originalWindowTitle)
+    if (process.platform === 'win32') {
+      const pressAlt = () => window.evaluate(window => {
+        window.focus()
+        window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Alt' })
+        window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' })
+      })
+      assert.equal(await window.evaluate(window => window.isMenuBarVisible()), false)
+      await pressAlt()
+      await expect.poll(() => window.evaluate(window => window.isMenuBarVisible())).toBe(true)
+      await pressAlt()
+      await expect.poll(() => window.evaluate(window => window.isMenuBarVisible())).toBe(false)
+      if (existsSync(join(dirname(receipt.executable), 'resources/app.asar'))) {
+        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File',
+          join(directory, 'verify-native-icon.ps1'), '-Executable', receipt.executable,
+          '-ExpectedIcon', join(directory, 'agentrouter-icon.ico')], { windowsHide: true, timeout: 30000 })
+      }
+    }
+  }
   launches.push({ productVersion: receipt.input.productVersion, durationMs: Date.now() - started })
   console.log(JSON.stringify({ phase: 'ready', ...launches.at(-1) }))
 }
@@ -372,6 +400,7 @@ try {
   if (candidate) writeFileSync(join(candidate.output, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))
 } catch (error) {
+  console.error(error)
   if (existsSync(join(state, 'startup-error.log'))) console.error(readFileSync(join(state, 'startup-error.log'), 'utf8'))
   console.error(`Acceptance state: ${state}`)
   throw error

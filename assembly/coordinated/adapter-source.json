@@ -2,23 +2,38 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "6d0adbb7523b26d606362ba773caa280a67e5020",
+  "commit": "5015f2410bfbd13d8298e270d4a3f8984b38d4c7",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 24554,
-      "sha256": "22912bc844ddcdbaff3526fee39f4265b01ca493c0d794f506e1a38e1776be7c"
+      "bytes": 26166,
+      "sha256": "a80f23f3388f02fc589895b3f811911f515bdca728aac1d38698ebfbb942b7ca"
+    },
+    {
+      "path": "agentrouter-icon.svg",
+      "bytes": 880,
+      "sha256": "49a1a0b15cdbfd6d9f9b95d17eccdabd7e1288c8e42df3ad4b729b756078b9c3"
+    },
+    {
+      "path": "agentrouter-icon.png",
+      "bytes": 22465,
+      "sha256": "53a2df654c2fd719b25c3f093688154e16c6c690335506fa520590027ac639f7"
+    },
+    {
+      "path": "agentrouter-icon.ico",
+      "bytes": 42752,
+      "sha256": "32c1bfde0f70ff3ff8b1d05cb6fef121a0d1035880a132fa2f0a37acecaf40a9"
     },
     {
       "path": "build.mjs",
-      "bytes": 11429,
-      "sha256": "0b52eec953a67643ce7eded6050cec2f8f839f58b8679c3d263e5206ffe03607"
+      "bytes": 11527,
+      "sha256": "9923798b0fb4559f571b969f42e034b0bcf2478b638fdef2a0ce04fae4fdb8a3"
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 69794,
-      "sha256": "0abe8e6ce919c10bb2dfe591666f87c92bd4c5b203e43c053ac7227a6bdb710a"
+      "bytes": 71192,
+      "sha256": "eaa7c56c3657013341e8937ce916ce28e335dd0bbbf1ae7b1dfd166e4b04d879"
     },
     {
       "path": "installer-acceptance.mjs",
@@ -37,8 +52,8 @@
     },
     {
       "path": "package-installer.mjs",
-      "bytes": 6527,
-      "sha256": "fc39fb884f745946a176fe198dbdd4bdce7f18326a7e33736fe7d80224fc15fd"
+      "bytes": 6605,
+      "sha256": "ffb86a09a926fba359531f2925875af13c1512f8e3c0ab71defbe6779b836c9a"
     },
     {
       "path": "package.json",
@@ -109,6 +124,11 @@
       "path": "import-signing-key.ps1",
       "bytes": 1843,
       "sha256": "21cd8d3421001ee943816a339e7f55b273e343e012193b028d09c80c012829d0"
+    },
+    {
+      "path": "verify-native-icon.ps1",
+      "bytes": 953,
+      "sha256": "f10a87404417f23e36e9107e1e531ff9f33de69e227bae481f61a2290860a80b"
     }
   ]
 }
