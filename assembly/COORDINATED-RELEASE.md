@@ -61,6 +61,15 @@ installer, blockmap, updater feed and both receipts. The website uses
 `release-receipt.json` and `signed-installed-acceptance.json` to recognize the
 new client; a test-only or unsigned candidate cannot enter that path.
 
+The same final step also checks the server-rendered Windows card at
+`https://agentrouter.top/for-dsh`: its visible version, GitHub installer link,
+mirror link and release notes must match the accepted product. The website's
+GitHub metadata cache lasts 300 seconds, so observation retries for up to six
+minutes. Hydration scripts or metadata containing the new version cannot mask
+an old visible card. The checker then downloads the complete website mirror
+and verifies its length and SHA-256 against the accepted installer. Workflow
+success and its public delivery summary require all of these checks to pass.
+
 If only final public observation fails, rerun the failed publish job from that
 same workflow run after inspecting the failure. It downloads the original
 assets and retains the original installed receipt. It never replaces published

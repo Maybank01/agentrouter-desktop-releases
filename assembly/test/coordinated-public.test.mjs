@@ -38,10 +38,14 @@ function fixture() {
     name, size: bytes.length, digest: `sha256:${digest(bytes)}`, browser_download_url: `${base}/download/v3.0.5/${name}`,
   })) }
   const urls = []
+  const page = `<article><p>当前版本：V 3.0.5</p>
+    <a data-download-channel="github" href="${base}/download/v3.0.5/AgentRouter-3.0.5-x64-Setup.exe">下载</a>
+    <a data-download-channel="mirror" href="/downloads/desktop/v3.0.5/AgentRouter-3.0.5-x64-Setup.exe">镜像</a>
+    <a href="${base}/tag/v3.0.5">版本说明</a></article>`
   const fetcher = async (url, options) => {
     urls.push(url)
     assert.equal(options.headers.Authorization, undefined, 'public validation must be anonymous')
-    return new Response(url.includes('api.github.com') ? JSON.stringify(release) : bodies.get(url.split('/').at(-1)))
+    return new Response(url.endsWith('/for-dsh') ? page : url.includes('api.github.com') ? JSON.stringify(release) : bodies.get(url.split('/').at(-1)))
   }
   return { input, receipt, bodies, release, fetcher, urls }
 }
@@ -50,6 +54,8 @@ test('published delivery verifies anonymous installer, receipts and actual updat
   const f = fixture()
   const result = await verifyCoordinatedPublicRelease(f.input, f.receipt, f.fetcher)
   assert.equal(result.publicFeedBytesVerified, true)
+  assert.equal(result.websiteVersionVerified, true)
+  assert.equal(result.websiteMirrorBytesVerified, true)
   assert.ok(f.urls.includes(`${f.input.updateUrl}latest.yml`))
 })
 

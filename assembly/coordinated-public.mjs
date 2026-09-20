@@ -6,6 +6,7 @@ import 'node:tls'
 import { createHash } from 'node:crypto'
 import { loadSigningPolicy } from './coordinated/windows-signing.mjs'
 import { manifestName, verifyUpdateManifest } from './coordinated/update-signature.mjs'
+import { verifyCoordinatedWebsite } from './coordinated-website.mjs'
 
 const base = 'https://github.com/Maybank01/agentrouter-desktop-releases/releases'
 const api = 'https://api.github.com/repos/Maybank01/agentrouter-desktop-releases/releases/latest'
@@ -95,5 +96,6 @@ export async function verifyCoordinatedPublicRelease(input, receipt, fetcher = f
       }
     }
   }
-  return { tag, anonymousDownloadsVerified: true, publicFeedBytesVerified: true }
+  return { tag, anonymousDownloadsVerified: true, publicFeedBytesVerified: true,
+    ...await verifyCoordinatedWebsite(input, receipt, fetcher) }
 }

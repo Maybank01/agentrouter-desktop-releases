@@ -386,7 +386,7 @@ jobs:
         run: node assembly/coordinated-recovery.mjs .local/signed-release
       - name: Verify Authenticode and install the signed product
         run: node assembly/coordinated-release.mjs accept .local/signed-release
-      - name: Publish the already installed bytes
+      - name: Publish and verify the website, downloads and update feed
         env:
           GH_TOKEN: ${{ github.token }}
         run: node assembly/coordinated-release.mjs publish .local/signed-release

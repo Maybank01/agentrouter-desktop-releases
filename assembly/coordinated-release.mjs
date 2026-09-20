@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { root } from './lib.mjs'
@@ -199,5 +199,9 @@ if (phase === 'stage') {
     gh(['release', 'upload', tag, join(path, 'signed-installed-acceptance.json'), '--repo', repo])
   }
   if (remote.draft) gh(['release', 'edit', tag, '--repo', repo, '--draft=false', '--latest'])
-  console.log(JSON.stringify({ ...await verifyCoordinatedPublicRelease(input, receipt), published: true }))
+  const delivery = { ...await verifyCoordinatedPublicRelease(input, receipt), published: true,
+    sourceCommit: releaseSource, verifierCommit: process.env.GITHUB_SHA, verifiedAt: new Date().toISOString() }
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+    '## Verified public delivery\n\n```json\n' + JSON.stringify(delivery, null, 2) + '\n```\n')
+  console.log(JSON.stringify(delivery))
 } else throw new Error('Expected stage, accept, or publish')
