@@ -6,8 +6,9 @@ used by this product. The feature source and candidate storage remain in private
 publisher. This workflow never publishes a Desktop installer or npm package.
 
 Dispatch `verify`, `candidate`, or `sync` on this repository's `main`, with a full
-source commit SHA and a unique lowercase request identifier. Every task must
-reference an ancestor of private source `main`. Pull-request heads and synthetic
+source commit SHA, source_branch (`main` or `dev`) and a unique lowercase request
+identifier. Every task must reference an ancestor of that reviewed private
+source branch. Pull-request heads and synthetic
 merge commits are not accepted, regardless of the author's repository role.
 The helper binds every result to its source SHA, executor workflow SHA, run ID,
 attempt and request ID. Concurrent upstream synchronizations are serialized.
@@ -18,14 +19,15 @@ credential limited to these two repositories (or replace it with short-lived
 GitHub App tokens). Private source/candidate transport needs Contents read/write;
 dispatch and run inspection need Actions read/write; DSH compatibility PRs need
 Pull requests read/write. Do not copy a broadly scoped local GitHub credential.
-Restrict each environment to its `main` branch; no human approval is needed. The
+The private source environment admits `dev` and `main`; keep the public executor
+environment restricted to its `main` branch. No human approval is needed. The
 public default token cannot read private source. Missing configuration fails
 the task; code availability does not establish successful operational migration.
 
 Credentials enter only source checkout and private result delivery steps. Builds
 run without them. These phases share a worker, so removing a token from the build
 environment is not a sandbox for unreviewed code. Only reviewed source already on
-main is eligible. Git authorization is per process, never persisted in checkout.
+dev/main is eligible. Git authorization is per process, never persisted in checkout.
 Private source and all private process output stay under the temporary runner
 directory; there are no public artifacts or caches. Public Actions output contains
 only stage/status messages. Failure logs and `result.json` are retained in the

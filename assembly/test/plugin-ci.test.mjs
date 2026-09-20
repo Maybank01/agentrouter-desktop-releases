@@ -25,6 +25,7 @@ test('private CI requests bind immutable source and public main execution identi
   for (const values of [
     { AGENTROUTER_SOURCE_SHA: 'main' }, { AGENTROUTER_SOURCE_SHA: `${sourceSha}\n` },
     { AGENTROUTER_CI_REQUEST_ID: '../other-repo' }, { AGENTROUTER_CI_TASK: 'publish' },
+    { AGENTROUTER_SOURCE_BRANCH: 'feature/unreviewed' },
     { GITHUB_REPOSITORY: sourceRepository }, { GITHUB_REF: 'refs/heads/untrusted' },
     { GITHUB_EVENT_NAME: 'pull_request' }, { GITHUB_WORKFLOW_SHA: sourceSha },
     { GITHUB_WORKFLOW_REF: `${executionRepository}/.github/workflows/release.yml@refs/heads/main` },
@@ -32,7 +33,7 @@ test('private CI requests bind immutable source and public main execution identi
   ]) assert.throws(() => requestFromEnvironment({ ...environment, ...values }))
 })
 
-test('every task requires a main ancestor and never accepts an unmerged PR head or merge', async () => {
+test('every task requires a reviewed branch ancestor and never accepts an unmerged PR head or merge', async () => {
   const request = requestFromEnvironment(environment)
   const mainApi = async () => ({ status: 'ahead', merge_base_commit: { sha: sourceSha } })
   for (const task of ['verify', 'candidate', 'sync']) {
@@ -43,11 +44,22 @@ test('every task requires a main ancestor and never accepts an unmerged PR head 
       { status: 'ahead', merge_base_commit: { sha: 'e'.repeat(40) } },
     ]) {
       const called = []
-      await assert.rejects(authorizeSource({ ...request, task }, async path => { called.push(path); return compared }), /SOURCE_NOT_ON_MAIN/)
+      await assert.rejects(authorizeSource({ ...request, task }, async path => { called.push(path); return compared }), /SOURCE_NOT_ON_REVIEWED_BRANCH/)
       assert.equal(called.length, 1)
       assert.match(called[0], /\/compare\//)
     }
   }
+})
+
+test('Dev validation uses the immutable commit on Dev without granting publication or PR admission', async () => {
+  const request = requestFromEnvironment({ ...environment, AGENTROUTER_SOURCE_BRANCH: 'dev' })
+  assert.equal(request.sourceBranch, 'dev')
+  assert.deepEqual(await authorizeSource(request, async path => {
+    assert.equal(path, `/repos/${sourceRepository}/compare/${sourceSha}...dev`)
+    return { status: 'identical', merge_base_commit: { sha: sourceSha } }
+  }), { kind: 'dev-ancestor' })
+  await assert.rejects(authorizeSource({ ...request, sourceBranch: 'feature/unreviewed' }, () => assert.fail()), /INVALID_SOURCE_BRANCH/)
+  await assert.rejects(authorizeSource(request, async () => ({ status: 'behind', merge_base_commit: { sha: sourceSha } })), /SOURCE_NOT_ON_REVIEWED_BRANCH/)
 })
 
 test('authenticated API requests reject redirects and unexpected repositories', async () => {

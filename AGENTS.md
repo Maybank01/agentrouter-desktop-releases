@@ -25,6 +25,14 @@ signing environment or candidate upload. Preserve the transaction, store
 migration and installed update/legacy migration checks. Keep private repository
 boundary checks local; do not claim this CI checks unexported source changes.
 Follow `assembly/CI.md` for export, dispatch and exact-source acceptance.
+CI selects installed acceptance from changed inputs. Docs, website/public
+observation and private-plugin executor changes run source tests only. Native
+adapter/product inputs, build/signing changes and unknown code keep full Windows
+acceptance. Manual ci.yml dispatch remains a full validation. Do not require a
+new installer for an unchanged product just to accept delivery documentation.
+New coordinated releases check npm next against the locked plugin before native
+acceptance; intentional older-plugin releases record retain_plugin_reason.
+Already signed recovery keeps its original selection and bytes.
 
 Keep the historical community assembly and releases. New installer tests execute
 only on disposable hosted Windows workers and use unsigned loopback-only feeds.

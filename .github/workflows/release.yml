@@ -16,6 +16,10 @@ on:
         description: Resume an existing signed release from this completed run without rebuilding
         type: string
         default: ''
+      retain_plugin_reason:
+        description: Only for an intentional older-plugin maintenance release; recorded in the release receipt
+        type: string
+        default: ''
       force:
         description: Rebuild the currently locked version
         type: boolean
@@ -252,6 +256,7 @@ jobs:
       contents: read
     outputs:
       receipt: ${{ steps.accept.outputs.receipt }}
+      selection: ${{ steps.selection.outputs.selection }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -265,6 +270,12 @@ jobs:
         run: |
           $release = Get-Content assembly/coordinated/release.json -Raw | ConvertFrom-Json
           if ($release.candidateOnly) { throw 'The product version is still candidate-only' }
+      - id: selection
+        name: Check published modules are included before expensive acceptance
+        if: inputs.publish
+        env:
+          RETAIN_PLUGIN_REASON: ${{ inputs.retain_plugin_reason }}
+        run: node assembly/coordinated-inputs.mjs
       - run: npm test
       - run: npm ci --ignore-scripts --prefix assembly/coordinated
       - run: node assembly/coordinated/test.mjs
@@ -334,6 +345,7 @@ jobs:
           INSTALLER_RECEIPT: ${{ steps.package.outputs.receipt }}
           ACCEPTED_CANDIDATE_JSON: ${{ needs.coordinated.outputs.receipt }}
           SIGNED_UPGRADE_RECEIPT: ${{ steps.signed_update.outputs.receipt }}
+          RELEASE_SELECTION_JSON: ${{ needs.coordinated.outputs.selection }}
         run: |
           node assembly/coordinated-release.mjs stage "$env:INSTALLER_RECEIPT"
           if ($LASTEXITCODE -ne 0) { throw 'Signed release staging failed' }
