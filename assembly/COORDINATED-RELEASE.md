@@ -67,6 +67,21 @@ assets and retains the original installed receipt. It never replaces published
 assets, rebuilds an installer under the same version or moves a newer latest
 release backwards. A changed package or installer requires a new version.
 
+If the publisher itself needs a reviewed fix after signing, resume from current
+main using the original completed run ID:
+
+```text
+gh workflow run release.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f delivery=coordinated -F publish=true -f resume_signed_run=<original-run-id>
+```
+
+Recovery requires the original main dispatch's candidate and signed-upgrade jobs
+to have passed. Its source must be an ancestor, and the complete exported adapter
+and product recipe must remain byte-identical. The new worker verifies and installs
+the existing signed assets again; it does not rebuild, sign, replace assets or
+change their source identity. The installed receipt also records the verifier's
+current commit. Draft lookup uses the Release ID because the REST tag endpoint
+only resolves published releases.
+
 ## User transition
 
 Users of the previous website DSH Desktop install the new product once from the

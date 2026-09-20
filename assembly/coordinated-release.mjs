@@ -31,6 +31,13 @@ const source = json(join(adapter, 'adapter-source.json'))
 const patchSha256 = hash(readFileSync(join(adapter, 'coordinated-delivery.patch')))
 const phase = process.argv[2]
 const path = resolve(process.argv[3])
+const releaseSource = process.env.AGENTROUTER_STAGED_SOURCE_SHA ?? process.env.GITHUB_SHA
+assert.match(releaseSource ?? '', /^[a-f0-9]{40}$/)
+if (releaseSource !== process.env.GITHUB_SHA) {
+  assert.notEqual(phase, 'stage', 'Recovery must not rebuild or replace staged assets')
+  execFileSync('git', ['merge-base', '--is-ancestor', releaseSource, 'HEAD'], { cwd: root, windowsHide: true })
+  execFileSync('git', ['diff', '--exit-code', releaseSource, 'HEAD', '--', 'assembly/coordinated'], { cwd: root, windowsHide: true })
+}
 
 function verifySignature(file) {
   return inspectWindowsSignature(file, policy)
@@ -108,7 +115,7 @@ if (phase === 'stage') {
   assert.equal(process.env.GITHUB_ACTIONS, 'true')
   assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted')
   const receipt = json(join(path, 'release-receipt.json'))
-  assert.equal(receipt.sourceCommit, process.env.GITHUB_SHA)
+  assert.equal(receipt.sourceCommit, releaseSource)
   assert.deepEqual(receipt.input, input)
   assert.equal(receipt.patchSha256, patchSha256)
   assert.equal(receipt.signed, true); assert.equal(receipt.testOnly, false)
@@ -154,19 +161,25 @@ if (phase === 'stage') {
   writeJson(join(path, 'signed-installed-acceptance.json'), { ...acceptance,
     installerExecuted: true, signedInstallerSha256: installer[0].sha256,
     signature, signing: input.signing, installedSignedUpdate: receipt.installedSignedUpdate,
-    sourceCommit: process.env.GITHUB_SHA, input, patchSha256 })
+    sourceCommit: releaseSource, verifierCommit: process.env.GITHUB_SHA, input, patchSha256 })
   console.log(JSON.stringify({ tag, acceptedSignedInstaller: true }))
 } else if (phase === 'publish') {
   const acceptance = json(join(path, 'signed-installed-acceptance.json'))
   const receipt = json(join(path, 'release-receipt.json'))
   await verifySignedAssets(path, receipt)
   assert.equal(acceptance.passed, true); assert.equal(acceptance.installerExecuted, true)
-  assert.equal(acceptance.sourceCommit, process.env.GITHUB_SHA)
+  assert.equal(acceptance.sourceCommit, releaseSource)
+  assert.equal(receipt.sourceCommit, releaseSource)
   assert.deepEqual(acceptance.input, input)
   assert.equal(acceptance.patchSha256, patchSha256)
   const installer = receipt.assets.find(file => file.name.endsWith('.exe'))
   assert.equal(acceptance.signedInstallerSha256, installer.sha256)
-  const remote = JSON.parse(gh(['api', `repos/${repo}/releases/tags/${tag}`]))
+  // The REST tag endpoint only resolves published releases. gh release view
+  // resolves the draft as well; then inspect its immutable numeric identity.
+  const identity = JSON.parse(gh(['release', 'view', tag, '--repo', repo, '--json', 'databaseId']))
+  assert.ok(Number.isSafeInteger(identity.databaseId) && identity.databaseId > 0)
+  const remote = JSON.parse(gh(['api', `repos/${repo}/releases/${identity.databaseId}`]))
+  assert.equal(remote.tag_name, tag)
   assert.equal(remote.prerelease, false)
   for (const file of receipt.assets) {
     const asset = remote.assets.find(asset => asset.name === file.name)
@@ -177,7 +190,7 @@ if (phase === 'stage') {
     // the original installed receipt and feed; never overwrite accepted bytes.
     const prior = JSON.parse(gh(['release', 'download', tag, '--repo', repo, '--pattern', 'signed-installed-acceptance.json', '--output', '-']))
     assert.equal(prior.passed, true); assert.equal(prior.installerExecuted, true)
-    assert.equal(prior.sourceCommit, process.env.GITHUB_SHA)
+    assert.equal(prior.sourceCommit, releaseSource)
     assert.deepEqual(prior.input, input)
     assert.equal(prior.patchSha256, patchSha256)
     assert.equal(prior.signedInstallerSha256, installer.sha256)
