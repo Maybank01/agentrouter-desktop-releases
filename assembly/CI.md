@@ -68,3 +68,23 @@ New coordinated publication compares its locked plugin with npm next before
 expensive acceptance. An intentional older-plugin maintenance release supplies
 retain_plugin_reason; this is retained with source/version/digest in the release
 receipt. Signed recovery preserves original input without chasing a newer tag.
+
+## Verified Dev handoff (2026-09-20)
+
+- [Adapter CI 35498309915](https://github.com/Maybank01/agentrouter-desktop-releases/actions/runs/35498309915)
+  passed source tests and complete Windows transactions, store reconciliation,
+  installed native update and legacy migration for executor PR #23. The merged
+  main tree is byte-identical to the tested PR tree; its duplicate Windows run
+  was cancelled after confirming `git diff --exit-code` between both commits.
+- [Dev execution 35499077643](https://github.com/Maybank01/agentrouter-desktop-releases/actions/runs/35499077643)
+  completed in 39 seconds including startup. It admitted an immutable reviewed
+  private Dev commit, checked the current DSH channel and delivered a successful
+  private receipt with `sourceBranch: dev` and `sourceAuthorization: dev-ancestor`.
+  DSH was unchanged, so this did not run or claim a new plugin candidate acceptance.
+- Local tests cover stale-plugin detection before publication, main/dev identity,
+  rejected task/PR refs and scope selection. Actual new-version signing remains
+  the existing product release workflow, not a consequence of this CI change.
+
+This follow-up is documentation only. Its CI should run source/provenance tests
+and skip the unchanged installer. A 39-second unchanged-host check is not a claim
+that the full signed release now meets the 600-second delivery objective.
