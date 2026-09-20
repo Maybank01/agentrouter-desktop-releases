@@ -116,9 +116,15 @@ const launch = async receipt => {
     assert.ok(found, 'The preceding public Desktop must boot its real Web carrier.')
   } else await page.waitForURL('dsh-app://app/index.html', { timeout: 180000 })
   await expect(page.getByRole('button', { name: '选择工作区', exact: true })).toBeVisible({ timeout: 90000 })
-  if (await page.getByText('内测声明', { exact: true }).isVisible()) {
-    await page.getByRole('button', { name: '继续', exact: true }).click()
-    await expect(page.getByText('内测声明', { exact: true })).toBeHidden()
+  const notice = page.getByRole('dialog', { name: '内测声明', exact: true })
+  if (await notice.isVisible()) {
+    // The preceding Desktop can reload its profile while saving first-run
+    // settings. Retry only this idempotent acknowledgement and require the real
+    // modal to close, instead of assuming a cold worker settles within 5 seconds.
+    await expect(async () => {
+      if (await notice.isVisible()) await notice.getByRole('button', { name: '继续', exact: true }).click()
+      await expect(notice).toBeHidden({ timeout: 15000 })
+    }).toPass({ timeout: 45000, intervals: [1000] })
   }
   for (const title of ['稍后配置', '稍后登录，关闭引导']) {
     const button = page.getByRole('button', { name: title, exact: true })

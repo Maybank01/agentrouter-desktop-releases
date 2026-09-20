@@ -6,8 +6,8 @@
 Desktop：一次产品更新同时安装经过验证的 DSH 与 AgentRouter 插件组合，界面只保留一个产品更新入口。
 官方或社区 DSH 中独立安装的用户仍使用同一个公开 npm 插件，由原客户端管理宿主更新。
 
-协同安装器当前仍为隔离候选，尚未配置正式 Windows 代码签名，也未切换官网或公开更新源。
-现有安装器、历史资产与更新地址继续保留。插件的 npm 发布与正式安装器发布分别验收。
+协同发行采用自签名和固定公钥验签，具体已发布版本以 Releases 中的同字节验收记录为准。
+现有安装器、历史资产与更新地址继续保留。插件的 npm 发布、CI 测试安装器与正式安装器发布分别验收。
 
 ## 协同发行
 
@@ -15,21 +15,26 @@ Desktop：一次产品更新同时安装经过验证的 DSH 与 AgentRouter 插�
 本仓库的 `assembly/coordinated/adapter-source.json` 记录导出来源与逐文件摘要；
 构建只使用已发布的精确 npm tarball，不在发行仓库编译另一份插件。
 
+本仓库的 [`ci.yml`](.github/workflows/ci.yml) 是 Desktop 适配器唯一的托管 CI 入口，
+独立使用公共 Ubuntu 和 Windows 运行器，不再依赖私有源仓库的计费运行器。
+它验证已导出的适配器；未导出的私有源码和源仓库边界测试仍须在本地验证。
+导出、手动触发及精确提交核验见 [CI 操作说明](assembly/CI.md)。
+
 Windows CI 在临时托管运行器上执行真实 NSIS 安装、原生更新下载、自动重启及旧客户端迁移，
 检查账号、原会话、第三方插件和单一更新入口。测试安装器仅使用回环 feed，不能转为正式 Release。
 产品版本与插件字节由 `assembly/coordinated/release.json` 绑定；只更新插件时也分配新产品版本。
 
 正式发行使用 `release.yml`，在 main 手动选择 `coordinated`；默认 `publish: false` 只做验收。
-发布要求正式发行输入、可用的上游签名配置及显式 publish。签名产物先进入 draft Release，
+发布要求正式发行输入、可用的自签配置及显式 publish。签名产物先进入 draft Release，
 另一台临时 Windows 运行器验证 Authenticode 并实际安装通过后，才发布同一份字节。
 
 发布后会匿名下载核对安装器、回执与实际更新源；观察失败可沿同一运行恢复，不重打包或覆盖已发布字节。
 具体候选命令、签名配置和恢复步骤见 [协同发行操作说明](assembly/COORDINATED-RELEASE.md)。
 
-签名运行器标签为 `self-hosted / Windows / X64 / agentrouter-signing`，使用 `windows-signing` 环境。
-现有适配沿用上游 SafeNet SignTool，需配置 `DSH_DESKTOP_WINDOWS_CER_FILE`、
-`DSH_DESKTOP_WINDOWS_SIGNTOOL`、`DSH_DESKTOP_WINDOWS_KEY_CONTAINER`，并通过环境 Secret
-提供 `DSH_DESKTOP_WINDOWS_TOKEN_PIN`。签名证书和 PIN 不进入本仓库。
+签名使用临时托管 Windows 运行器，以及仅允许 main 使用的 `windows-signing` 环境。
+加密 PFX 和密码分别由 `AGENTROUTER_SIGNING_PFX`、`AGENTROUTER_SIGNING_PASSWORD` 提供；
+私钥不进入本仓库，签名完成后删除运行器上的临时密钥。自签完整性不等于 Windows 公共信任，
+客户端通过固定公钥和完整文件清单验签，无需安装根证书。普通 `ci.yml` 不接触签名凭据。
 
 历史社区组装仍可通过 `legacy` 手动发行。普通 npm 插件发布不会自动触发桌面发行或改写第三方客户端。
 
