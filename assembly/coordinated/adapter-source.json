@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "7120866efb2820447d6f7fdcea5934a6284b0a91",
+  "commit": "d4281faf21c341f64c332ecbc0bb0f7bd1058ea4",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -73,7 +73,7 @@
     {
       "path": "release.json",
       "bytes": 710,
-      "sha256": "8d90d3f5337d317e1a14393bc09eb0facfeb3862968bdaa053df76688f68de24"
+      "sha256": "9ca6f1d3abd24295b5a77450c14039488c8460741b5424826fde496e7ca103d2"
     },
     {
       "path": "store-migration-acceptance.mjs",
@@ -142,8 +142,8 @@
     },
     {
       "path": "release-history.json",
-      "bytes": 589,
-      "sha256": "1e2f2a4a888d7f9c70e108ee37320d53e73921a74b9d32632c43a51e5a9cc425"
+      "bytes": 1034,
+      "sha256": "95e28567599ceeed403d14fc114990d225982e2129ef905f4c13c397d869a0f2"
     },
     {
       "path": "update-center.md",

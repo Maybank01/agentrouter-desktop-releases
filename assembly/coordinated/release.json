@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "candidateOnly": false,
-  "productVersion": "3.0.8",
+  "productVersion": "3.0.9",
   "dshVersion": "0.1.5-rc.2",
   "plugin": {
     "name": "@agentrouter-top/dsh-codex",
-    "version": "0.12.2",
-    "filename": "agentrouter-top-dsh-codex-0.12.2.tgz",
-    "size": 195059,
-    "sha256": "1b42461b64ba78474cd4cf084960f55f78b868537b5982168c43ceffe97af72a",
-    "integrity": "sha512-Dd+ydhDerp0RVX4nL22TBY1LvU1+9R+AFTNYMeCiQgVk1o86kBKpSX+YHRX0mVx74rAEfHCyzDrk3/9z3Z+Q/w=="
+    "version": "0.15.0",
+    "filename": "agentrouter-top-dsh-codex-0.15.0.tgz",
+    "size": 301083,
+    "sha256": "1d6c1339d8667dad4f218d14f80b0a33e680402879c1641b2fb1ddd6e9914f55",
+    "integrity": "sha512-OsmlfG3RGvOuXpcvKut+ys1vSgYHkixgExhPWZDjWepNle09l2pUaGcHqAkVdnP1lahoeY/D7wWn9TC8nSQ1zQ=="
   },
   "updateUrl": "https://github.com/Maybank01/agentrouter-desktop-releases/releases/latest/download/",
   "signing": {
