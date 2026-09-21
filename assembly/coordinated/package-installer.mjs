@@ -7,6 +7,8 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build, Platform, Arch } from 'electron-builder'
+import { load as loadYaml, dump as dumpYaml } from 'js-yaml'
+import { releaseHistory } from './update-routes.mjs'
 import { directory } from './prepare.mjs'
 import { createSelfSigner, loadSigningPolicy, inspectWindowsSignature, writeSignedManifest } from './windows-signing.mjs'
 
@@ -80,6 +82,14 @@ await build({ projectDir: join(candidate.output, 'app'), config, targets: Platfo
 const paths = readdirSync(output).filter(name => /(?:\.exe|\.blockmap|latest\.yml)$/.test(name))
 const installer = paths.find(name => name.endsWith('.exe'))
 assert.ok(installer && paths.includes('latest.yml'))
+// Optional display metadata travels with the existing feed before its digest/signature.
+const feedFile = join(output, 'latest.yml')
+const feedData = loadYaml(readFileSync(feedFile, 'utf8'))
+assert.equal(feedData.version, candidate.input.productVersion)
+feedData.agentrouter = { pluginVersion: candidate.input.plugin.version,
+  releaseNotes: releaseHistory([...(candidate.input.releaseNotes ?? []),
+    ...JSON.parse(readFileSync(join(directory, 'release-history.json'), 'utf8'))], candidate.input.productVersion) }
+writeFileSync(feedFile, dumpYaml(feedData))
 let signature, runtimeSignature
 if (signed) {
   signature = inspectWindowsSignature(join(output, installer), policy)

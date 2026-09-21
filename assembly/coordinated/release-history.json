@@ -1,0 +1,17 @@
+[
+  {
+    "version": "3.0.8",
+    "publishedAt": "2026-09-20T06:55:37Z",
+    "changes": [
+      { "kind": "fixed", "text": "修复旧客户端迁移时，因历史插件记录残留而无法启动的问题。" },
+      { "kind": "improved", "text": "本地安装包缺失时，可从匹配的锁文件恢复插件版本；迁移前备份原配置。" }
+    ]
+  },
+  {
+    "version": "3.0.7",
+    "publishedAt": "2026-09-20T03:32:37Z",
+    "changes": [
+      { "kind": "other", "text": "内置 DSH 0.1.5-rc.2 与 AgentRouter 插件 0.12.2，客户端与插件统一更新。" }
+    ]
+  }
+]
