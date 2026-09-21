@@ -296,19 +296,33 @@ try {
     if (migratePnpm10) oldPnpmGraph(profile)
     if (nativeUpdate) {
       await launch(baseline)
-      const closing = app.waitForEvent('close', { timeout: 300000 })
+      // The native menu still checks the same coordinator; defer its combined
+      // action and exercise the public page's separate download/restart routes.
       await app.evaluate(({ dialog, Menu }) => {
         const previous = dialog.showMessageBox.bind(dialog)
         dialog.showMessageBox = async (...args) => {
           const options = args.at(-1)
           if (options.type === 'info' && options.buttons?.length === 2)
-            return { response: 0, checkboxChecked: false }
+            return { response: 1, checkboxChecked: false }
           return previous(...args)
         }
         const item = Menu.getApplicationMenu()?.getMenuItemById('product-update')
         if (!item?.enabled) throw new Error('The product update entry is unavailable')
         item.click()
       })
+      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 60000 }).toBe('available')
+      const discovered = await api('updates/status')
+      assert.equal(discovered.product.version, baseline.input.productVersion)
+      assert.equal(discovered.currentVersion, baseline.input.plugin.version)
+      assert.equal(discovered.product.latestVersion, candidate.input.productVersion)
+      assert.equal(discovered.product.latestPluginVersion, candidate.input.plugin.version)
+      await api('updates/download', { version: candidate.input.productVersion })
+      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 300000 }).toBe('ready')
+      assert.equal((await api('updates/status')).canInstall, true)
+      assert.equal(await app.evaluate(({ app }) => app.getVersion()), baseline.input.productVersion,
+        'Download alone does not restart or activate the installer')
+      const closing = app.waitForEvent('close', { timeout: 300000 })
+      await api('updates/install', { version: candidate.input.productVersion, interrupt: false })
       await closing
       app = undefined
       await expect.poll(() => {

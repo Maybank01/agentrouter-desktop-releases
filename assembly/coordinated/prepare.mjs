@@ -27,6 +27,8 @@ export function prepareSource() {
   // One shared verifier is bundled into the native main process and also used
   // by independent release acceptance. It is part of the exported adapter.
   copyFileSync(join(directory, 'update-signature.mjs'), join(source, 'apps/desktop/src/agentrouter-update-signature.mjs'))
+  copyFileSync(join(directory, 'update-routes.mjs'), join(source, 'apps/desktop/src/agentrouter-update-routes.mjs'))
+  copyFileSync(join(directory, 'release-history.json'), join(source, 'apps/desktop/src/agentrouter-release-history.json'))
   const changes = git(source, 'diff', '--name-only').split('\n')
   assert.ok(changes.length > 0 && changes.every(path => path.startsWith('apps/desktop/') || path === 'apps/desktop-host/src/index.ts'))
   symlinkSync(join(directory, 'node_modules'), join(source, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
