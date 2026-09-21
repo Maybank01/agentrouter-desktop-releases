@@ -1,5 +1,13 @@
 [
   {
+    "version": "3.0.9",
+    "changes": [
+      { "kind": "new", "text": "支持接收专属活动通知并领取 Token 礼物，网页与客户端共享领取记录。" },
+      { "kind": "improved", "text": "重新设计登录、账户、算力卡与卡券页面，新增年度 Token 用量热力图。" },
+      { "kind": "improved", "text": "新增关于与更新页面，集中查看版本、下载进度和更新日志。" }
+    ]
+  },
+  {
     "version": "3.0.8",
     "publishedAt": "2026-09-20T06:55:37Z",
     "changes": [
