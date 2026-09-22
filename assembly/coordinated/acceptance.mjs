@@ -10,6 +10,8 @@ import { extractFile } from '@electron/asar'
 import { load, dump } from 'js-yaml'
 import { _electron, expect } from '@playwright/test'
 import { directory, root } from './prepare.mjs'
+import { assertExternalWebNavigation } from './external-navigation-acceptance.mjs'
+import { assertCredentialRecovery } from './credential-recovery-acceptance.mjs'
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const legacyExecutable = process.argv.find(value => value.startsWith('--legacy-executable='))?.slice('--legacy-executable='.length)
@@ -76,6 +78,7 @@ const origin = `http://127.0.0.1:${gateway.address().port}`
 let app, page
 const launches = []
 let nativeUpdateMetrics
+let externalBrowserNavigation = false
 const launch = async receipt => {
   const started = Date.now()
   console.log(JSON.stringify({ phase: 'launching', productVersion: receipt.input.productVersion }))
@@ -171,6 +174,10 @@ const launch = async receipt => {
     assert.ok(startup.visibleMs < 10000, 'Show startup progress within ten seconds')
   }
   launches.push({ productVersion: receipt.input.productVersion, durationMs: Date.now() - started, startup })
+  if (!receipt.legacy && (!candidate || receipt === candidate)) {
+    await assertExternalWebNavigation(app, page)
+    externalBrowserNavigation = true
+  }
   console.log(JSON.stringify({ phase: 'ready', ...launches.at(-1) }))
 }
 const close = async () => { await app?.close(); app = undefined }
@@ -447,6 +454,17 @@ try {
       assert.deepEqual({ text: readFileSync(modules, 'utf8'), mtime: statSync(modules).mtimeMs }, beforeStartup)
     }
   }
+  let credentialRecovery
+  if (!candidate && !legacyExecutable) {
+    await close()
+    credentialRecovery = await assertCredentialRecovery({ executablePath: baseline.executable, state, home, electronHome, env })
+    await launch(baseline)
+    assert.equal((await api('status')).connected, false)
+    assert.ok(await sessionStatus(session.sessionId), 'Credential recovery must retain the existing conversation')
+    assert.equal((await api('connect', { apiKey: 'sk-desktop-acceptance-fixture' })).connected, true)
+    credentialRecovery.existingSessionRetained = true
+    credentialRecovery.signInAvailable = true
+  }
   const receipt = { passed: true, state, electronGui: true, offlineSeedInstall: true, accountFixture: true,
     productUpgrade: !!candidate, dshUnchanged: candidate?.input.dshVersion === baseline.input.dshVersion, credentialsPreserved: !!candidate,
     sessionMetadataPreserved: !!candidate, existingConversationContinued: !!candidate, modelRequests, singleUpdateEntry: !!candidate,
@@ -456,7 +474,7 @@ try {
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
     thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
-    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, launches })
+    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   if (candidate) writeFileSync(join(candidate.output, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))

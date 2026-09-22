@@ -284,30 +284,48 @@ index d057d6d..970a2b5 100644
    readonly type: 'ready'
    readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..f7c9636 100644
+index 8bc9fdc..8dcadcd 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
-@@ -1,5 +1,5 @@
+@@ -1,7 +1,7 @@
  /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
  
 -import { readFile, writeFile } from 'node:fs/promises'
+-import { extname, join, normalize, resolve, sep } from 'node:path'
 +import { mkdir, readFile, writeFile } from 'node:fs/promises'
- import { extname, join, normalize, resolve, sep } from 'node:path'
++import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
  import { fileURLToPath } from 'node:url'
-@@ -20,4 +20,6 @@ import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
+ import {
+   app,
+@@ -10,6 +10,7 @@ import {
+   ipcMain,
+   Menu,
+   protocol,
++  shell,
+   type IpcMainInvokeEvent,
+ } from 'electron'
+ import { resolveDesktopPaths } from './paths.ts'
+@@ -19,6 +20,10 @@ import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
+ import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
  import { claimDesktopSingleInstance } from './single-instance.ts'
  import { DesktopUpdateCoordinator } from './update-coordinator.ts'
 +import { createProductUpdateRoutes } from './agentrouter-update-routes.mjs'
 +import updateHistory from './agentrouter-release-history.json'
++import { inspectCredentialStartupFailure, backupInvalidCredentials, credentialRecoveryDialog } from './agentrouter-credential-recovery.mjs'
++import { installExternalWebNavigation } from './agentrouter-external-navigation.mjs'
  
  const SCHEME = 'dsh-app'
-@@ -45,4 +47,5 @@ const MIME: Readonly<Record<string, string>> = {
+ let focusPrimaryWindow = (): void => {}
+@@ -44,6 +49,7 @@ const MIME: Readonly<Record<string, string>> = {
+   '.html': 'text/html; charset=utf-8',
    '.js': 'text/javascript; charset=utf-8',
    '.svg': 'image/svg+xml',
 +  '.png': 'image/png',
  }
  
-@@ -80,6 +83,9 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+ interface RuntimeResources {
+@@ -79,8 +85,11 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+   return port
  }
  
 -function createWindow(preload: string): BrowserWindow {
@@ -318,24 +336,39 @@ index 8bc9fdc..f7c9636 100644
 +    autoHideMenuBar: process.platform === 'win32',
      width: 1280,
      height: 840,
-@@ -95,4 +101,10 @@ function createWindow(preload: string): BrowserWindow {
+     minWidth: 880,
+@@ -94,9 +103,18 @@ function createWindow(preload: string): BrowserWindow {
+       webSecurity: true,
      },
    })
+-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+-  window.webContents.on('will-navigate', (event, url) => {
+-    if (new URL(url).protocol !== `${SCHEME}:`) event.preventDefault()
 +  window.on('page-title-updated', (event, pageTitle) => {
 +    event.preventDefault()
 +    window.setTitle(pageTitle.endsWith(' — DeepSeek Harness')
 +      ? `${pageTitle.slice(0, -'DeepSeek Harness'.length)}AgentRouter`
 +      : title)
 +  })
-   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-   window.webContents.on('will-navigate', (event, url) => {
-@@ -132,4 +144,5 @@ async function serveShellAsset(request: Request): Promise<Response> {
++  installExternalWebNavigation(window.webContents, (url: string) => shell.openExternal(url), () => {
++    if (window.isDestroyed()) return
++    const chinese = app.getLocale().startsWith('zh')
++    void dialog.showMessageBox(window, { type: 'error',
++      title: chinese ? '无法打开浏览器' : 'Unable to open browser',
++      message: chinese ? '请检查系统默认浏览器设置，然后重试。' : 'Check your default browser settings, then try again.' }).catch(() => {})
+   })
+   return window
+ }
+@@ -131,6 +149,7 @@ async function serveShellAsset(request: Request): Promise<Response> {
+ }
  
  async function main(): Promise<void> {
 +  const started = Date.now()
    const resources = runtimeResources()
    const paths = resolveDesktopPaths()
-@@ -148,7 +161,73 @@ async function main(): Promise<void> {
+   const development = developmentProject()
+@@ -147,9 +166,75 @@ async function main(): Promise<void> {
+   const messages = locale.messages
    const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
    const managementPreload = fileURLToPath(new URL('./preload.cjs', import.meta.url))
 +  let updateRoutes: ReturnType<typeof createProductUpdateRoutes> | undefined
@@ -409,7 +442,9 @@ index 8bc9fdc..f7c9636 100644
 +      ? `${messages.installAndRestart} (${state.version})` : messages.checkUpdatesMenu
      for (const window of BrowserWindow.getAllWindows()) {
        window.webContents.send(DESKTOP_IPC.updatesState, state)
-@@ -159,5 +238,6 @@ async function main(): Promise<void> {
+     }
+@@ -158,7 +243,8 @@ async function main(): Promise<void> {
+ 
    const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
      const next = new DesktopHostProcess(resources.node, projectDir, hostInspectPort)
 -    await next.start()
@@ -417,19 +452,21 @@ index 8bc9fdc..f7c9636 100644
 +    catch (error) { await next.stop().catch(() => undefined); throw error }
      return next
    }
-@@ -205,4 +285,5 @@ async function main(): Promise<void> {
+   const hooks: DesktopProjectHooks = {
+@@ -204,16 +290,21 @@ async function main(): Promise<void> {
+ 
    if (development === undefined) {
      await manager.applyRelease(resources.seed, app.getVersion(), {
 +      progress,
        ...hooks,
        beforeActivate: async () => {},
-@@ -210,4 +291,5 @@ async function main(): Promise<void> {
+       afterActivate: async () => {},
      })
    }
 +  await progress('starting')
    host = await startHost()
  
-@@ -215,4 +297,7 @@ async function main(): Promise<void> {
+   const updates = new DesktopUpdateCoordinator(
      publishUpdate,
      async () => {
 +      if (host !== undefined && !await host.prepareRestart()) {
@@ -437,7 +474,9 @@ index 8bc9fdc..f7c9636 100644
 +      }
        shellInstallerOwnsQuit = true
        const active = host
-@@ -222,13 +307,13 @@ async function main(): Promise<void> {
+       host = undefined
+@@ -221,15 +312,15 @@ async function main(): Promise<void> {
+     },
    )
  
 -  protocol.handle(SCHEME, (request) => {
@@ -458,20 +497,26 @@ index 8bc9fdc..f7c9636 100644
 +
    const mutate = async (event: IpcMainInvokeEvent, mutation: Parameters<DesktopProjectManager['mutate']>[0]): Promise<void> => {
      assertDesktopSender(event, ['shell'])
-@@ -273,4 +358,5 @@ async function main(): Promise<void> {
+     if (development !== undefined) {
+@@ -272,6 +363,7 @@ async function main(): Promise<void> {
+ 
    const checkAndPrompt = async (manual: boolean): Promise<void> => {
      const state = await updates.check()
 +    if (!manual) return
      if (state.phase === 'error') {
        if (manual) {
-@@ -283,5 +369,5 @@ async function main(): Promise<void> {
+         await dialog.showMessageBox({
+@@ -282,7 +374,7 @@ async function main(): Promise<void> {
+       }
        return
      }
 -    if (state.phase !== 'available') {
 +    if (state.phase !== 'available' && state.phase !== 'ready') {
        if (manual) {
          await dialog.showMessageBox({
-@@ -318,7 +404,6 @@ async function main(): Promise<void> {
+           type: 'info',
+@@ -317,9 +409,8 @@ async function main(): Promise<void> {
+       pluginWindow.focus()
        return
      }
 -    pluginWindow = createWindow(managementPreload)
@@ -480,14 +525,16 @@ index 8bc9fdc..f7c9636 100644
 -    pluginWindow.setTitle(messages.pluginWindowTitle)
      pluginWindow.once('ready-to-show', () => { pluginWindow?.show() })
      pluginWindow.once('closed', () => { pluginWindow = undefined })
-@@ -335,5 +420,5 @@ async function main(): Promise<void> {
+     void pluginWindow.loadURL(`${SCHEME}://shell/plugin-manager.html`)
+@@ -334,36 +425,21 @@ async function main(): Promise<void> {
+         enabled: development === undefined,
          click: openPluginWindow,
        },
 -      { label: messages.checkUpdatesMenu, click: () => { void checkAndPrompt(true) } },
 +      { id: 'product-update', label: messages.checkUpdatesMenu, click: () => { void checkAndPrompt(true) } },
        { type: 'separator' },
        { role: 'quit' },
-@@ -341,28 +426,13 @@ async function main(): Promise<void> {
+     ],
    }]))
  
 -  const createMainWindow = (): BrowserWindow => {
@@ -521,7 +568,9 @@ index 8bc9fdc..f7c9636 100644
 +    ready: true, durationMs: Date.now() - started, rebuilt: events.some(event => event.stage === 'installing') }))
    publishUpdate(updateState)
    setTimeout(() => { void checkAndPrompt(false) }, 10_000)
-@@ -374,12 +444,5 @@ async function main(): Promise<void> {
+ 
+@@ -373,14 +449,7 @@ async function main(): Promise<void> {
+   app.on('window-all-closed', () => {
      if (process.platform !== 'darwin') app.quit()
    })
 -  app.on('before-quit', (event) => {
@@ -535,14 +584,42 @@ index 8bc9fdc..f7c9636 100644
 +
  }
  
-@@ -393,5 +456,20 @@ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unk
+ const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
+@@ -392,6 +461,47 @@ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unk
+   if (diagnosticFile !== undefined) {
      await writeFile(diagnosticFile, `${error instanceof Error ? error.stack ?? message : message}\n`).catch(() => undefined)
    }
 -  dialog.showErrorBox(resolveDesktopLocale(app.getLocale()).messages.startupFailed, message)
 +  const messages = resolveDesktopLocale(app.getLocale()).messages
-+  const recovery = await dialog.showMessageBox({ type: 'error', title: messages.startupFailed,
-+    message, buttons: [messages.checkUpdatesMenu, messages.later], defaultId: 0, cancelId: 1 })
-+  if (recovery.response === 0) {
++  const credentialHome = dirname(resolveDesktopPaths().root)
++  const invalidCredentials = await inspectCredentialStartupFailure(error, credentialHome)
++  let checkUpdates = false
++  if (invalidCredentials) {
++    const chinese = app.getLocale().startsWith('zh')
++    const recovery = await dialog.showMessageBox(credentialRecoveryDialog(invalidCredentials, chinese))
++    if (recovery.response === 0) {
++      try { await backupInvalidCredentials(invalidCredentials, credentialHome) }
++      catch {
++        await dialog.showMessageBox({ type: 'error', title: chinese ? '凭据恢复未完成' : 'Credential recovery was not completed',
++          message: chinese ? '原文件未重置。请关闭其他 DSH 窗口后重新打开客户端，再尝试恢复。'
++            : 'The original file was not reset. Close other DSH windows, reopen AgentRouter and try recovery again.' })
++        app.exit(1)
++        return
++      }
++      // The startup window is deliberately unclosable during installation.
++      // Release that guard before asking Electron to quit and relaunch.
++      for (const window of BrowserWindow.getAllWindows()) window.setClosable(true)
++      app.relaunch()
++      app.quit()
++      return
++    }
++    checkUpdates = recovery.response === 1
++  } else {
++    const recovery = await dialog.showMessageBox({ type: 'error', title: messages.startupFailed,
++      message, buttons: [messages.checkUpdatesMenu, messages.later], defaultId: 0, cancelId: 1 })
++    checkUpdates = recovery.response === 0
++  }
++  if (checkUpdates) {
 +    const updates = new DesktopUpdateCoordinator(state => state)
 +    const state = await updates.check()
 +    if (state.phase === 'available') {

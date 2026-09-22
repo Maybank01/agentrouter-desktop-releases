@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "1143becd76a0a392950ba1b70d7b0588134480fa",
+  "commit": "9553066e08ca9ada4403b3e9435197e516b2d585",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 30708,
-      "sha256": "49a95ace3a852070a129576c2e75d4b6cf5866ef549bf3f657e5a4c4ea299242"
+      "bytes": 31730,
+      "sha256": "b2848ca2217363c8d63618fd3fea698263c40a4002b6bf6d437195f17c3a5098"
     },
     {
       "path": "agentrouter-icon.svg",
@@ -32,8 +32,8 @@
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 103826,
-      "sha256": "b7997dbe60368537c2f804e2eb5c0bbb657166c580334e03ee43dff42f55d009"
+      "bytes": 106982,
+      "sha256": "a2b948e8a0dc10567361ef8fdb684c84635f35aef594179ef70a5c320a554419"
     },
     {
       "path": "installer-acceptance.mjs",
@@ -57,23 +57,23 @@
     },
     {
       "path": "package.json",
-      "bytes": 693,
-      "sha256": "3e806b242869eaaca68ec04cb3178a7d5625df841d98125c55e4e2f50d201e2f"
+      "bytes": 765,
+      "sha256": "fbcd3fdb809402bb183a987e95b08e7efe68c8274d5a4da06a924f54e27d606f"
     },
     {
       "path": "package-lock.json",
-      "bytes": 541851,
-      "sha256": "321bc121b0025d3166d9715b5e27f8f314c1b8a37b23c1b4f252deb1ad0456d2"
+      "bytes": 541931,
+      "sha256": "84d56895da6427206aab1f5816235f0142539cb3b7950164f2f959f1f9c31c6c"
     },
     {
       "path": "prepare.mjs",
-      "bytes": 2670,
-      "sha256": "0a82e0a169e9935f9f2f3ba3ce080fed4db280f0910b9a380b65c68c1620ee85"
+      "bytes": 2928,
+      "sha256": "b9fd573c4d5f16e1943860b33ace23c5fd56219f6b8bb84f79e6cc13069a46ce"
     },
     {
       "path": "release.json",
       "bytes": 711,
-      "sha256": "6cec110a99d05877d75cba8456b1ab4f867ed48b24e3ceedd9d1addd1e957ae7"
+      "sha256": "9581984a7535e7be7107e0e8af445ce9917b7eac7e7cf3121731ea418c8eae76"
     },
     {
       "path": "store-migration-acceptance.mjs",
@@ -82,13 +82,13 @@
     },
     {
       "path": "test.mjs",
-      "bytes": 736,
-      "sha256": "03265870148c4825cd56e59ec33efe7f6b470d9086ae014c52ef522eff5a389f"
+      "bytes": 784,
+      "sha256": "a83ba061c5739d80616d26f520b0b6ba15dc057b4da3afcf9bb3ee86b37646b9"
     },
     {
       "path": "upstream.lock.json",
-      "bytes": 509,
-      "sha256": "5a7e1b715b6a33762f1cad088294c63cb3ad600b43328091a14c3cb22bee9fba"
+      "bytes": 589,
+      "sha256": "635b4e8d8ec0a83a7178d5ba5e72371c1e82d3f2091748087688351a33bf668b"
     },
     {
       "path": "vitest.config.mjs",
@@ -147,13 +147,43 @@
     },
     {
       "path": "release-history.json",
-      "bytes": 2043,
-      "sha256": "ca8aeb4fd06b7eab887d9ede9229357293855433e0fe64a38e04af6d57755eaf"
+      "bytes": 2360,
+      "sha256": "d038676c1c39b40d08d7c08a9fe14cef1ec33029fa461b7e09c5d2c7081dd392"
     },
     {
       "path": "update-center.md",
       "bytes": 2598,
       "sha256": "cd8cbf914fafa3ffd85fdf4ef3778ca9d4455972f8dddb4b170f50f4784f60cc"
+    },
+    {
+      "path": "credential-recovery.mjs",
+      "bytes": 3908,
+      "sha256": "7185cd01698dd9b5ec1482b5962c7fc2d5c2d8d6658af1b1eec060b8cdee3e8e"
+    },
+    {
+      "path": "credential-recovery.test.mjs",
+      "bytes": 4701,
+      "sha256": "1d0943877e2bf877d84fbf7c682d8b47ff1cbe4b1f1e227cf4e6d93a84b6efa1"
+    },
+    {
+      "path": "credential-recovery-acceptance.mjs",
+      "bytes": 3800,
+      "sha256": "18c68a1f2bc8ead29a9ba96f74b0e5839d6ce36386653b9ee054ad24b56cefbf"
+    },
+    {
+      "path": "external-navigation.mjs",
+      "bytes": 803,
+      "sha256": "b4507d5ef54e73f91cf42ed2436bde46004c2ebe8e9b96940485d5dc20ff1c9b"
+    },
+    {
+      "path": "external-navigation.test.mjs",
+      "bytes": 2557,
+      "sha256": "8f514d63d04a401bf19abd9fa5297edf4cc0f28e1a8e4c5d56bc7088ef4e0e1d"
+    },
+    {
+      "path": "external-navigation-acceptance.mjs",
+      "bytes": 2442,
+      "sha256": "988274d3878ee84c641a0fbd0c869c127da49b7bd4ad9cc19d97f2ae3478bd76"
     }
   ]
 }
