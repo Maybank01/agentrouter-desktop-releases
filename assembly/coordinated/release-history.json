@@ -1,5 +1,12 @@
 [
   {
+    "version": "3.0.14",
+    "changes": [
+      { "kind": "fixed", "text": "修复 Codex 连续回复、工具执行前后消息被错误拼接的问题。" },
+      { "kind": "improved", "text": "保留 Codex 消息分段，重新打开会话后仍能恢复原有分段。" }
+    ]
+  },
+  {
     "version": "3.0.13",
     "changes": [
       { "kind": "fixed", "text": "修复账号登录时，授权链接无法在系统浏览器打开的问题。" },
