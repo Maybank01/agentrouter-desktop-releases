@@ -144,6 +144,25 @@ writeJson(join(upgrade.paths.profile, 'desktop-release.json'), release('3.0.1'))
 assert.equal(await upgrade.manager.applyRelease(seed, '3.0.2', hooks(upgrade)), true)
 verify(upgrade)
 
+// pnpm's offline resolver reports an absent version in an existing registry
+// index as NO_MATCHING_VERSION, not NO_OFFLINE_META. Exercise the real resolver
+// with an old index and require one online refresh of the same exact version.
+const stale = oldProfile('stale-registry-index')
+writeJson(join(stale.paths.profile, 'desktop-release.json'), release('3.0.1'))
+const staleIndex = join(stale.paths.pnpm.cache, 'pnpm/v11/metadata/registry.npmjs.org', `${thirdParty.name}.jsonl`)
+mkdirSync(dirname(staleIndex), { recursive: true })
+writeFileSync(staleIndex, '{}\n' + JSON.stringify({ name: thirdParty.name,
+  'dist-tags': { latest: '0.1.0-beta.10' },
+  versions: { '0.1.0-beta.10': { name: thirdParty.name, version: '0.1.0-beta.10' } } }) + '\n')
+const traceOffset = readFileSync(trace, 'utf8').length
+assert.equal(await stale.manager.applyRelease(seed, '3.0.2', hooks(stale)), true)
+verify(stale)
+assert.equal(json(join(stale.paths.profile, 'package.json')).dependencies[thirdParty.name], thirdParty.version)
+const staleCommands = readFileSync(trace, 'utf8').slice(traceOffset).trim().split('\n').map(line => JSON.parse(line))
+assert.equal(staleCommands.filter(entry => entry.codes.includes('ERR_PNPM_NO_MATCHING_VERSION')).length, 1)
+assert.equal(staleCommands.filter(entry => entry.args.includes('--prefer-offline=false') && entry.status === 0).length, 1)
+assert.equal(await stale.manager.applyRelease(seed, '3.0.2', hooks(stale)), false)
+
 const failed = oldProfile('failed-prepare')
 const lockPath = join(failed.paths.profile, 'pnpm-lock.yaml')
 const originalLock = readFileSync(lockPath, 'utf8')
@@ -174,6 +193,7 @@ const receipt = { passed: true, verifiedAt: new Date().toISOString(), platform: 
   upstreamCommit: json(join(output, 'source.json')).upstreamCommit,
   patchSha256: digest(readFileSync(join(directory, 'coordinated-delivery.patch'))), pnpm: versions, thirdParty,
   actualPnpmExecutables: true, fixtureCore: true, electronGui: false, sameReleaseRepair: true, productUpgrade: true,
+  staleRegistryMetadataRefreshed: true, exactUserVersionPreserved: true,
   missingOldStorePackagesFetched: true, repeatedStartupDoesNotRebuild: true,
   preparationFailurePreservesActive: true, healthFailurePreservesActive: true, activationFailureRestoresActive: true,
   thirdPartyAndConfigurationPreserved: true, syntheticDataPreserved: true, retrySucceeds: true,

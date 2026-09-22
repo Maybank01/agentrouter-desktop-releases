@@ -219,6 +219,24 @@ const verifyMigratedGraph = profile => {
   assert.match(load(readFileSync(join(profile, 'node_modules/.modules.yaml'), 'utf8')).packageManager, /^pnpm@11\./)
   assert.equal(json(join(profile, 'node_modules/dsh-image-viewer/package.json')).version, '0.1.0-beta.11')
 }
+const staleRegistryMetadata = !!candidate && (migratePnpm10 || !!legacyExecutable)
+const prepareStaleRegistryMetadata = async () => {
+  if (!staleRegistryMetadata) return
+  const metadata = join(home, 'desktop/pnpm/cache/pnpm/v11/metadata/registry.npmjs.org')
+  mkdirSync(join(metadata, '@agentrouter-top'), { recursive: true })
+  // A preceding installation knows only its old managed plugin version. The
+  // next seed contains the new package bytes, but an add of a retained user
+  // plugin still asks pnpm to resolve the managed package against this index.
+  const name = '@agentrouter-top/dsh-codex'
+  const version = baseline.input.plugin.version
+  writeFileSync(join(metadata, name + '.jsonl'), '{}\n' + JSON.stringify({ name,
+    'dist-tags': { next: version }, versions: { [version]: { name, version } } }) + '\n')
+  const response = await fetch('https://registry.npmjs.org/dsh-image-viewer', { signal: AbortSignal.timeout(30000) })
+  assert.equal(response.status, 200)
+  const viewer = await response.json()
+  assert.ok(viewer.versions['0.1.0-beta.11'])
+  writeFileSync(join(metadata, 'dsh-image-viewer.jsonl'), JSON.stringify({ etag: response.headers.get('etag') }) + '\n' + JSON.stringify(viewer) + '\n')
+}
 const prepareLegacyMigrationCases = async profile => {
   assert.equal(app, undefined, 'Close the old isolated app before preparing its migration')
   assert.ok(resolve(profile).startsWith(resolve(home) + sep))
@@ -321,6 +339,7 @@ try {
       assert.equal((await api('updates/status')).canInstall, true)
       assert.equal(await app.evaluate(({ app }) => app.getVersion()), baseline.input.productVersion,
         'Download alone does not restart or activate the installer')
+      await prepareStaleRegistryMetadata()
       const closing = app.waitForEvent('close', { timeout: 300000 })
       await api('updates/install', { version: candidate.input.productVersion, interrupt: false })
       await closing
@@ -345,7 +364,13 @@ try {
         '$p = @(Get-Process | Where-Object { $_.Path -eq $env:AGENTROUTER_TEST_INSTALLED_EXE -and $_.MainWindowHandle -ne 0 }); if ($p.Count -eq 0) { throw "Installer did not restart the app" }; foreach ($appProcess in $p) { if (!$appProcess.CloseMainWindow() -or !$appProcess.WaitForExit(15000)) { throw "Restarted app did not close cleanly" } }'],
       { env: processEnv, windowsHide: true, stdio: 'inherit' })
     }
+    if (!nativeUpdate) await prepareStaleRegistryMetadata()
     await launch(candidate)
+    if (staleRegistryMetadata) {
+      const refreshed = JSON.parse(readFileSync(join(home,
+        'desktop/pnpm/cache/pnpm/v11/metadata/registry.npmjs.org/@agentrouter-top/dsh-codex.jsonl'), 'utf8').trim().split('\n')[1])
+      assert.ok(refreshed.versions[candidate.input.plugin.version], 'The actual installed upgrade must refresh the stale managed-plugin index')
+    }
     if (legacyExecutable) {
       const migration = json(join(profile, 'agentrouter-legacy-migration.json'))
       assert.equal(readFileSync(join(migration.backup, 'package.json'), 'utf8'), legacyManifest)
@@ -409,7 +434,8 @@ try {
     automaticInstallerRestart: nativeUpdate, publicFeedUpgrade: false, legacyProfileMigration: !!legacyExecutable,
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
-    thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, repeatedStartupDoesNotRebuild: migratePnpm10, launches })
+    thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
+    repeatedStartupDoesNotRebuild: migratePnpm10, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   if (candidate) writeFileSync(join(candidate.output, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))
