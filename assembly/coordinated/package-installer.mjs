@@ -46,6 +46,7 @@ else process.env.DSH_DESKTOP_TARGET_PLATFORM = 'win32'
 const { createElectronBuilderConfig } = await import(pathToFileURL(join(candidate.source, 'apps/desktop/electron-builder.config.mjs')).href)
 const config = createElectronBuilderConfig(process.env, 'win32', 'x64')
 config.win = { ...config.win, icon: join(directory, 'agentrouter-icon.ico') }
+config.nsis = { ...config.nsis, include: join(directory, 'update-installer.nsh') }
 const output = join(candidate.output, signedTestFeed ? 'signed-test-installer' : testOnly ? 'test-installer' : 'installer')
 Object.assign(config, {
   // The main/preload code is already bundled; the verified runtime graph lives
@@ -78,6 +79,8 @@ if (selfSigned) {
   config.win.signtoolOptions.publisherName = publisher
 }
 if (testOnly) config.publish = [{ provider: 'generic', url: testFeed }]
+// GitHub Release assets support one range per request, not multipart ranges.
+config.publish = config.publish.map(feed => ({ ...feed, useMultipleRangeRequest: false }))
 await build({ projectDir: join(candidate.output, 'app'), config, targets: Platform.WINDOWS.createTarget(['nsis'], Arch.x64), publish: 'never' })
 const paths = readdirSync(output).filter(name => /(?:\.exe|\.blockmap|latest\.yml)$/.test(name))
 const installer = paths.find(name => name.endsWith('.exe'))

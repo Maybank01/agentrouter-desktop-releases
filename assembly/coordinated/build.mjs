@@ -94,7 +94,7 @@ for (let offset = 0; offset < firstParty.length; offset += 6) {
 // must be byte-identical to its already published public registry artifact.
 const { c } = await import('tar')
 const hostFile = `deepseek-ai-dsh-desktop-host-${lock.dshVersion}.tgz`
-await c({ cwd: host, file: join(coreDir, hostFile), gzip: true, prefix: 'package' }, ['package.json', 'lib', 'config'])
+await c({ cwd: host, file: join(coreDir, hostFile), gzip: true, prefix: 'package', portable: true, noMtime: true }, ['package.json', 'lib', 'config'])
 const hostBytes = readFileSync(join(coreDir, hostFile))
 packages.push({ name: hostManifest.name, version: lock.dshVersion, file: hostFile, bytes: hostBytes.length,
   integrity: 'sha512-' + digest(hostBytes, 'sha512', 'base64') })
@@ -112,6 +112,12 @@ env.NPM_CONFIG_USERCONFIG = join(output, 'npmrc')
 const pnpm = join(directory, 'node_modules/pnpm/bin/pnpm.mjs')
 execFileSync(process.execPath, [pnpm, `--config.store-dir=${store}`, '--config.enable-global-virtual-store=false',
   'install', '--lockfile-only'], { cwd: seed, env, stdio: 'inherit', windowsHide: true, timeout: 480000 })
+const runtimeIdentity = { dsh: input.dshVersion, node: process.versions.node,
+  pnpm: json(join(directory, 'node_modules/pnpm/package.json')).version,
+  files: ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'desktop-packages.json']
+    .map(name => [name, digest(readFileSync(join(seed, name)))]) }
+writeJson(join(seed, 'desktop-release.json'), { ...json(join(seed, 'desktop-release.json')),
+  runtimeFingerprint: digest(Buffer.from(JSON.stringify(runtimeIdentity))) })
 const seedLock = loadYaml(readFileSync(join(seed, 'pnpm-lock.yaml'), 'utf8'))
 assert.equal(seedLock.packages[`${input.plugin.name}@${input.plugin.version}`].resolution.integrity, input.plugin.integrity,
   'The seed must resolve the same published plugin bytes verified before assembly.')

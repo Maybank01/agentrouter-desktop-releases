@@ -75,6 +75,7 @@ await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${gateway.address().port}`
 let app, page
 const launches = []
+let nativeUpdateMetrics
 const launch = async receipt => {
   const started = Date.now()
   console.log(JSON.stringify({ phase: 'launching', productVersion: receipt.input.productVersion }))
@@ -163,7 +164,13 @@ const launch = async receipt => {
       }
     }
   }
-  launches.push({ productVersion: receipt.input.productVersion, durationMs: Date.now() - started })
+  let startup
+  if (!receipt.legacy && existsSync(join(home, 'desktop/startup.json'))) {
+    await expect.poll(() => { try { return json(join(home, 'desktop/startup.json')).ready } catch { return false } }, { timeout: 15000 }).toBe(true)
+    startup = json(join(home, 'desktop/startup.json'))
+    assert.ok(startup.visibleMs < 10000, 'Show startup progress within ten seconds')
+  }
+  launches.push({ productVersion: receipt.input.productVersion, durationMs: Date.now() - started, startup })
   console.log(JSON.stringify({ phase: 'ready', ...launches.at(-1) }))
 }
 const close = async () => { await app?.close(); app = undefined }
@@ -310,7 +317,7 @@ try {
   }
   if (candidate) {
     if (!legacyExecutable) assert.equal(baseline.input.dshVersion, candidate.input.dshVersion, 'This test must update the plugin while retaining DSH.')
-    assert.notEqual(baseline.input.plugin.version, candidate.input.plugin.version)
+    if (!nativeUpdate) assert.notEqual(baseline.input.plugin.version, candidate.input.plugin.version)
     if (migratePnpm10) oldPnpmGraph(profile)
     if (nativeUpdate) {
       await launch(baseline)
@@ -340,6 +347,9 @@ try {
       assert.equal(await app.evaluate(({ app }) => app.getVersion()), baseline.input.productVersion,
         'Download alone does not restart or activate the installer')
       await prepareStaleRegistryMetadata()
+      const modulesPath = join(profile, 'node_modules/.modules.yaml')
+      const modulesBefore = { bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }
+      const restartStarted = Date.now()
       const closing = app.waitForEvent('close', { timeout: 300000 })
       await api('updates/install', { version: candidate.input.productVersion, interrupt: false })
       await closing
@@ -356,6 +366,17 @@ try {
         try { return json(join(profile, 'desktop-release.json')).productVersion } catch { return undefined }
       }, { timeout: 180000 }).toBe(candidate.input.productVersion)
       console.log(JSON.stringify({ phase: 'restarted-app-activated-profile', productVersion: candidate.input.productVersion }))
+      await expect.poll(() => {
+        try { const startup = json(join(home, 'desktop/startup.json')); return startup.productVersion === candidate.input.productVersion && startup.ready }
+        catch { return false }
+      }, { timeout: 180000 }).toBe(true)
+      const startup = json(join(home, 'desktop/startup.json'))
+      assert.equal(startup.rebuilt, false, 'An identical runtime must not be installed again')
+      assert.ok(startup.visibleMs < 10000, 'Update restart must show its startup window within ten seconds')
+      assert.ok(startup.durationMs < 30000, 'An unchanged runtime must become ready within thirty seconds')
+      assert.deepEqual({ bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }, modulesBefore)
+      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true }
+      console.log(JSON.stringify({ nativeUpdateMetrics }))
       const processEnv = { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }
       await expect.poll(() => Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
         '@(Get-Process | Where-Object { $_.Path -eq $env:AGENTROUTER_TEST_INSTALLED_EXE -and $_.MainWindowHandle -ne 0 }).Count'],
@@ -435,7 +456,7 @@ try {
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
     thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
-    repeatedStartupDoesNotRebuild: migratePnpm10, launches })
+    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   if (candidate) writeFileSync(join(candidate.output, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))
