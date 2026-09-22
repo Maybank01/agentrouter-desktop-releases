@@ -1,5 +1,12 @@
 [
   {
+    "version": "3.0.11",
+    "changes": [
+      { "kind": "fixed", "text": "修复升级后因本地插件版本缓存过期而无法启动的问题。" },
+      { "kind": "improved", "text": "迁移已有插件时自动刷新过期缓存，保留账户、会话和插件设置。" }
+    ]
+  },
+  {
     "version": "3.0.10",
     "changes": [
       { "kind": "fixed", "text": "修复 DeepSeek 深度思考占满旧输出上限、导致回答提前结束的问题。" },

@@ -434,7 +434,7 @@ index 8bc9fdc..5b8b832 100644
    app.exit(1)
  })
 diff --git a/apps/desktop/src/project-manager.ts b/apps/desktop/src/project-manager.ts
-index b9b94f7..be80437 100644
+index b9b94f7..3695572 100644
 --- a/apps/desktop/src/project-manager.ts
 +++ b/apps/desktop/src/project-manager.ts
 @@ -22,6 +22,8 @@ import {
@@ -462,23 +462,25 @@ index b9b94f7..be80437 100644
  }
  
  /** Installed desktop project manifest slice. */
-@@ -109,6 +113,15 @@ const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
+@@ -109,6 +113,17 @@ const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
  const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
  const DESKTOP_REGISTRY = 'https://registry.npmjs.org/'
  
 +class PnpmCommandError extends Error {
 +  readonly offlineCacheMiss: boolean
++  readonly staleMetadata: boolean
 +
 +  constructor(status: string, diagnostics: string) {
 +    super(`desktop project: pnpm exited with ${status}${diagnostics.trim() === '' ? '' : `: ${diagnostics.trim()}`}`)
-+    this.offlineCacheMiss = /\bERR_PNPM_NO_OFFLINE_(?:META|TARBALL)\b/u.test(diagnostics)
++    this.staleMetadata = /\bERR_PNPM_NO_MATCHING_VERSION\b/u.test(diagnostics)
++    this.offlineCacheMiss = this.staleMetadata || /\bERR_PNPM_NO_OFFLINE_(?:META|TARBALL)\b/u.test(diagnostics)
 +  }
 +}
 +
  function errorOf(reason: unknown, fallback: string): Error {
    return reason instanceof Error ? reason : new Error(fallback)
  }
-@@ -121,7 +134,7 @@ function readJson(path: string): unknown {
+@@ -121,7 +136,7 @@ function readJson(path: string): unknown {
    return JSON.parse(readFileSync(path, 'utf8'))
  }
  
@@ -487,7 +489,7 @@ index b9b94f7..be80437 100644
    const entries = Object.entries(overrides).sort(([left], [right]) => left.localeCompare(right))
    const overrideSection = entries.length === 0
      ? ''
-@@ -130,7 +143,8 @@ function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string
+@@ -130,7 +145,8 @@ function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string
    const coreBuildKey = coreBuildSpec === undefined
      ? CORE_BUILD_PACKAGE
      : `${CORE_BUILD_PACKAGE}@${coreBuildSpec.replace('file:./', 'file:')}`
@@ -497,7 +499,7 @@ index b9b94f7..be80437 100644
  }
  
  function releaseFile(projectDir: string): DesktopRelease {
-@@ -265,7 +279,7 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
+@@ -265,7 +281,7 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
    const expectedOverrides = desktopCorePackageOverrides(packageSet)
    if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
      || Object.entries(expectedOverrides).some(([name, spec]) => manifest.dependencies[name] !== spec)
@@ -506,7 +508,7 @@ index b9b94f7..be80437 100644
      throw new Error(`desktop project: core package mapping does not match ${DESKTOP_PACKAGE_SET_FILE}`)
    }
    return manifest
-@@ -285,7 +299,85 @@ function profilePluginNames(projectDir: string): readonly string[] {
+@@ -285,7 +301,85 @@ function profilePluginNames(projectDir: string): readonly string[] {
  }
  
  function pluginRecords(projectDir: string): readonly DesktopPluginRecord[] {
@@ -593,7 +595,7 @@ index b9b94f7..be80437 100644
  }
  
  function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
-@@ -387,7 +479,8 @@ export class DesktopProjectManager {
+@@ -387,7 +481,8 @@ export class DesktopProjectManager {
    /** Read the release version applied to the active desktop project. */
    releaseVersion(): string {
      if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
@@ -603,7 +605,7 @@ index b9b94f7..be80437 100644
    }
  
    /** Install or reconcile the active project to the Electron package's exact release. */
-@@ -397,30 +490,83 @@ export class DesktopProjectManager {
+@@ -397,30 +492,83 @@ export class DesktopProjectManager {
        verifySeedIntegrity(seedDir)
        const target = releaseFile(seedDir)
        verifyDesktopCorePackageSet(seedDir, target.version)
@@ -669,7 +671,7 @@ index b9b94f7..be80437 100644
              ])
 -            writeProfilePlugins(stagingProfile, plugins)
 +          }
-+          for (const plugin of removed) await this.runPnpm(stagingProfile, ['remove', plugin.name, '--offline', '--lockfile-only', '--trust-lockfile'])
++          for (const plugin of removed) await this.prepareFromCache(stagingProfile, ['remove', plugin.name, '--lockfile-only', '--trust-lockfile'])
 +          if (userPlugins.length > 0 || removed.length > 0) {
 +            await this.prepareFromCache(stagingProfile, ['install', '--frozen-lockfile', '--trust-lockfile'])
 +          }
@@ -698,7 +700,7 @@ index b9b94f7..be80437 100644
            }
          } else {
            copyMetadata(seedDir, stagingProfile)
-@@ -441,10 +587,18 @@ export class DesktopProjectManager {
+@@ -441,10 +589,18 @@ export class DesktopProjectManager {
      await this.withLock(async () => {
        this.recover()
        if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
@@ -718,7 +720,7 @@ index b9b94f7..be80437 100644
          await this.applyMutation(stagingProfile, mutation)
          await hooks.healthCheck(stagingProfile)
          await this.activate(stagingProfile, hooks)
-@@ -461,12 +615,48 @@ export class DesktopProjectManager {
+@@ -461,12 +617,50 @@ export class DesktopProjectManager {
      return path
    }
  
@@ -744,9 +746,11 @@ index b9b94f7..be80437 100644
 +      await this.runPnpm(projectDir, [...args, '--offline'])
 +    } catch (error) {
 +      if (!(error instanceof PnpmCommandError) || !error.offlineCacheMiss) throw error
-+      // A new store format cannot read packages cached by the old pnpm. Only fetch
-+      // missing user dependencies in staging; never change or delete the old graph.
-+      const network = ['--prefer-offline', '--fetch-retries=1', '--fetch-timeout=30000']
++      // Offline NO_MATCHING_VERSION can mean an old registry index, even when the
++      // exact package is present in the seed store. Refresh once before declaring
++      // it unavailable. Network/integrity failures still propagate without a loop.
++      // Only prepare staging; never change or delete the active dependency graph.
++      const network = [error.staleMetadata ? '--prefer-offline=false' : '--prefer-offline', '--fetch-retries=1', '--fetch-timeout=30000']
 +      if (args[0] === 'install') {
 +        // Fetching and linking in one incremental operation can strand pnpm 11
 +        // workers. Populate the store first, then require a fully offline install.
@@ -768,7 +772,7 @@ index b9b94f7..be80437 100644
          const installed = inspectPlugin(projectDir, requestedName)
          const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
          writeProfilePlugins(
-@@ -481,7 +671,7 @@ export class DesktopProjectManager {
+@@ -481,7 +675,7 @@ export class DesktopProjectManager {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
          const remaining = pluginRecords(projectDir).filter(plugin => plugin.name !== mutation.name)
@@ -777,7 +781,7 @@ index b9b94f7..be80437 100644
          writeProfilePlugins(projectDir, remaining)
          return
        }
-@@ -491,7 +681,7 @@ export class DesktopProjectManager {
+@@ -491,7 +685,7 @@ export class DesktopProjectManager {
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
@@ -786,7 +790,7 @@ index b9b94f7..be80437 100644
          {
            const installed = inspectPlugin(projectDir, mutation.name)
            writeProfilePlugins(
-@@ -505,6 +695,14 @@ export class DesktopProjectManager {
+@@ -505,6 +699,14 @@ export class DesktopProjectManager {
      }
    }
  
@@ -801,7 +805,7 @@ index b9b94f7..be80437 100644
    private mergeSeedPnpmState(seedDir: string): void {
      const transactionRoot = join(this.paths.staging, randomUUID())
      const extractedStore = join(transactionRoot, 'store')
-@@ -526,6 +724,7 @@ export class DesktopProjectManager {
+@@ -526,6 +728,7 @@ export class DesktopProjectManager {
      writeJson(this.paths.pending, pending)
      await hooks.beforeActivate()
      let activeMoved = false
@@ -809,7 +813,7 @@ index b9b94f7..be80437 100644
      try {
        removeOwnedDirectory(this.paths.rollback)
        mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
-@@ -537,10 +736,11 @@ export class DesktopProjectManager {
+@@ -537,10 +740,11 @@ export class DesktopProjectManager {
        mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
        writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
        renameSync(stagingProfile, this.paths.profile)
@@ -822,7 +826,7 @@ index b9b94f7..be80437 100644
        if (activeMoved && existsSync(this.paths.rollback)) renameSync(this.paths.rollback, this.paths.profile)
        if (existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
        await hooks.afterActivate().catch(() => undefined)
-@@ -548,7 +748,7 @@ export class DesktopProjectManager {
+@@ -548,7 +752,7 @@ export class DesktopProjectManager {
      }
    }
  
@@ -831,7 +835,7 @@ index b9b94f7..be80437 100644
      const [command, ...commandArgs] = args
      if (command === undefined) throw new Error('desktop project: pnpm command is required')
      for (const path of [this.paths.root, this.paths.pnpm.store, this.paths.pnpm.cache,
-@@ -560,7 +760,7 @@ export class DesktopProjectManager {
+@@ -560,7 +764,7 @@ export class DesktopProjectManager {
      const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
        !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
      )))
@@ -840,7 +844,7 @@ index b9b94f7..be80437 100644
        const child = spawn(this.runtime.node, [
          this.runtime.pnpm,
          `--config.registry=${DESKTOP_REGISTRY}`,
-@@ -571,8 +771,12 @@ export class DesktopProjectManager {
+@@ -571,8 +775,12 @@ export class DesktopProjectManager {
          ...commandArgs,
        ], {
          cwd: projectDir,
@@ -853,7 +857,7 @@ index b9b94f7..be80437 100644
            COREPACK_HOME: this.paths.pnpm.home,
            NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
            NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
-@@ -599,12 +803,14 @@ export class DesktopProjectManager {
+@@ -599,12 +807,14 @@ export class DesktopProjectManager {
          return
        }
        let diagnostics = ''
@@ -868,7 +872,7 @@ index b9b94f7..be80437 100644
        child.stderr.setEncoding('utf8')
        child.stderr.on('data', appendDiagnostics)
        const complete = (settleChild: () => void): void => {
-@@ -622,12 +828,10 @@ export class DesktopProjectManager {
+@@ -622,12 +832,10 @@ export class DesktopProjectManager {
        child.once('close', (code, signal) => {
          complete(() => {
            if (code === 0) {
@@ -883,7 +887,7 @@ index b9b94f7..be80437 100644
          })
        })
      })
-@@ -690,13 +894,14 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
+@@ -690,13 +898,14 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
      name: PROJECT_NAME,
      private: true,
      version: '0.0.0',
@@ -1179,7 +1183,7 @@ index d3a08d7..fdc9cc1 100644
      const project = projectWithHost(`
  const bodies = new Map()
 diff --git a/apps/desktop/tests/project-manager.spec.ts b/apps/desktop/tests/project-manager.spec.ts
-index 27ac24f..8e6744e 100644
+index 27ac24f..b380f2c 100644
 --- a/apps/desktop/tests/project-manager.spec.ts
 +++ b/apps/desktop/tests/project-manager.spec.ts
 @@ -85,10 +85,12 @@ function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): v
@@ -1460,7 +1464,7 @@ index 27ac24f..8e6744e 100644
 +    expect(manager.listPlugins()).toEqual([])
 +  })
 +
-+  it.each(['ERR_PNPM_NO_OFFLINE_META', 'ERR_PNPM_NO_OFFLINE_TARBALL', 'ERR_PNPM_TARBALL_INTEGRITY'])(
++  it.each(['ERR_PNPM_NO_OFFLINE_META', 'ERR_PNPM_NO_OFFLINE_TARBALL', 'ERR_PNPM_NO_MATCHING_VERSION', 'ERR_PNPM_TARBALL_INTEGRITY', 'ERR_PNPM_NO_MATCHING_VERSION_INSIDE_WORKSPACE'])(
 +    'fetches missing user packages only for offline cache misses (%s)', async (code) => {
 +      const root = temporaryRoot()
 +      const paths = resolveDesktopPaths(join(root, 'home'))
@@ -1486,12 +1490,12 @@ index 27ac24f..8e6744e 100644
 +await import(${JSON.stringify(pathToFileURL(delegate).href)})
 +`)
 +      const repair = new DesktopProjectManager(paths, { node: process.execPath, pnpm: wrapper })
-+      const offlineMiss = code.includes('NO_OFFLINE')
++      const offlineMiss = code.includes('NO_OFFLINE') || code === 'ERR_PNPM_NO_MATCHING_VERSION'
 +      await expect(repair.applyRelease(seed, '1.0.0', hooks())).rejects.toThrow(offlineMiss ? 'ERR_PNPM_FETCH_FAILED' : code)
 +      const invocations = readFileSync(attempts, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[])
 +      expect(invocations).toHaveLength(offlineMiss ? 2 : 1)
 +      if (offlineMiss) {
-+        expect(invocations[1]).toContain('--prefer-offline')
++        expect(invocations[1]).toContain(code === 'ERR_PNPM_NO_MATCHING_VERSION' ? '--prefer-offline=false' : '--prefer-offline')
 +        expect(invocations[1]).toContain('fetch')
 +        expect(invocations[1]).toContain('--ignore-scripts')
 +        expect(invocations[1]).toContain('--fetch-retries=1')
