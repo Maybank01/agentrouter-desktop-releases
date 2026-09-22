@@ -5,5 +5,5 @@
   "tag": "dsh-v0.1.5-rc.2",
   "dshVersion": "0.1.5-rc.2",
   "patch": "coordinated-delivery.patch",
-  "scope": "Desktop release metadata, managed plugin and dependency store reconciliation, legacy profile migration, installer identity, quiet updates and silent idle restart. No DSH core or conversation UI changes."
+  "scope": "Desktop release identity, managed plugin and dependency transactions, runtime reuse, differential downloads, installer/startup progress, legacy migration and idle restart. No DSH core or conversation UI changes."
 }

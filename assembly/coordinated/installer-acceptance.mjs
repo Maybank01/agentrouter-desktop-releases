@@ -44,8 +44,12 @@ const node = (script, args, name) => run(process.execPath, [join(directory, scri
 const lastResult = log => JSON.parse(readFileSync(log, 'utf8').trim().split(/\r?\n/).at(-1))
 const baselineInput = json(join(directory, 'installer-baseline.json'))
 assert.equal(baselineInput.dshVersion, target.input.dshVersion)
-assert.notEqual(baselineInput.plugin.version, target.input.plugin.version)
-let baselineInputFile = join(directory, 'installer-baseline.json')
+// Native-update acceptance uses identical plugin/runtime inputs to prove shell
+// updates retain the active graph. The legacy installer below still exercises
+// a real old-plugin migration, including stale registry metadata.
+baselineInput.plugin = target.input.plugin
+let baselineInputFile = join(work, 'baseline-input.json')
+writeJson(baselineInputFile, baselineInput)
 if (signedTarget) {
   baselineInput.signing = target.input.signing
   baselineInputFile = join(work, 'signed-baseline-input.json')
@@ -55,6 +59,7 @@ const baselineFile = lastResult(await node('build.mjs', [baselineInputFile], 'bu
 const baseline = json(baselineFile)
 const files = new Map()
 const requests = []
+const transfers = []
 const server = createServer((req, res) => {
   const name = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname.slice(1))
   const file = files.get(name)
@@ -62,9 +67,22 @@ const server = createServer((req, res) => {
   requests.push(name)
   res.setHeader('content-length', file.bytes)
   res.setHeader('content-type', name.endsWith('.yml') ? 'text/yaml' : 'application/octet-stream')
-  // A complete 200 response also supports the updater's verified full-download fallback.
-  if (req.method === 'HEAD') res.end()
-  else createReadStream(file.path).pipe(res)
+  const range = req.headers.range
+  if (range) {
+    // Match GitHub's real behavior: reject multipart ranges, serve single ranges.
+    const match = /^bytes=(\d+)-(\d+)$/.exec(range)
+    if (!match) { res.removeHeader('content-length'); res.writeHead(501); res.end(); return }
+    const start = Number(match[1]), end = Math.min(Number(match[2]), file.bytes - 1)
+    assert.ok(start <= end && start >= 0)
+    const bytes = end - start + 1
+    res.setHeader('content-length', bytes)
+    res.setHeader('accept-ranges', 'bytes')
+    res.setHeader('content-range', 'bytes ' + start + '-' + end + '/' + file.bytes)
+    res.writeHead(206)
+    transfers.push({ name, bytes, range })
+    createReadStream(file.path, { start, end }).pipe(res)
+  } else if (req.method === 'HEAD') res.end()
+  else { transfers.push({ name, bytes: file.bytes }); createReadStream(file.path).pipe(res) }
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const feed = `http://127.0.0.1:${server.address().port}/`
@@ -90,6 +108,15 @@ try {
   assert.ok(requests.includes('latest.yml') && requests.some(name => name === targetPackage.assets.find(asset => asset.name.endsWith('.exe')).name))
   if (signedTarget) assert.ok(requests.includes('agentrouter-update.json'), 'The installed native updater must request and verify the signed manifest')
 
+  const installerAsset = targetPackage.assets.find(asset => asset.name.endsWith('.exe'))
+  const installerTransfers = transfers.filter(entry => entry.name === installerAsset.name)
+  const downloadedBytes = installerTransfers.reduce((sum, entry) => sum + entry.bytes, 0)
+  assert.ok(installerTransfers.length > 0 && installerTransfers.every(entry => entry.range), 'Native updater must use differential ranges without full-download fallback')
+  assert.ok(downloadedBytes < installerAsset.bytes * 0.2, 'A shell-only update must transfer less than 20% of the full installer')
+  const differential = { fullBytes: installerAsset.bytes, downloadedBytes,
+    ratio: downloadedBytes / installerAsset.bytes, requests: installerTransfers.length, fullFallback: false }
+  console.error(JSON.stringify({ differential }))
+
   const legacy = json(join(directory, 'legacy-installer.json'))
   const legacyInstaller = join(work, legacy.filename)
   const response = await fetch(legacy.url)
@@ -107,7 +134,7 @@ try {
     freshInstallerExecuted: true, nativeUpdaterExecuted: true, installerRestartedApp: true,
     legacyInstallerExecuted: true, publicFeedChanged: false, update, migration,
     nativeSignatureVerificationExecuted: Boolean(signedTarget), rootTrustInstalled: false,
-    feedRequests: [...new Set(requests)] }
+    differential, feedRequests: [...new Set(requests)] }
   writeJson(join(target.output, 'installer-acceptance.json'), receipt)
   console.log(JSON.stringify({ passed: true, receipt: join(target.output, 'installer-acceptance.json') }))
 } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
