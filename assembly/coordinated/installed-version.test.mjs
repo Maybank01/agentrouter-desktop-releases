@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { finished } from 'node:stream/promises'
 import test from 'node:test'
 import { createPackage, extractFile } from '@electron/asar'
 import { readInstalledProductVersion } from './installed-version.mjs'
@@ -15,7 +16,9 @@ test('observes an installer replacing an archive after the Cancel check cached i
     for (const version of ['3.0.14', '3.0.15']) {
       await writeFile(join(input, 'main.js'), 'x'.repeat(version === '3.0.14' ? 100 : 3000))
       await writeFile(join(input, 'package.json'), JSON.stringify({ version }))
-      await createPackage(input, join(root, `${version}.asar`))
+      // asar 3.4.1 resolves to the output stream after end(), before its final
+      // writes finish. Copying then can capture a truncated fixture on Windows.
+      await finished(await createPackage(input, join(root, `${version}.asar`)))
     }
     await copyFile(join(root, '3.0.14.asar'), archive)
     assert.equal(JSON.parse(extractFile(archive, 'package.json').toString()).version, '3.0.14')
