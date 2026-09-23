@@ -60,3 +60,35 @@ test('HTTP is restricted to an explicit packaged loopback test feed', () => {
   assert.throws(() => createPinnedUpdateVerifier({ ...config, feed: 'http://127.0.0.1:4567/' }, () => '3.0.7'))
   assert.doesNotThrow(() => createPinnedUpdateVerifier({ ...config, feed: 'http://127.0.0.1:4567/', testOnly: true }, () => '3.0.7'))
 })
+
+test('one authenticated manifest serves the signature hook, cache check and restart even when latest moves or goes offline', async () => {
+  const urls = []
+  const updater = { verifyUpdateCodeSignature: async () => null, configOnDisk: { value: Promise.resolve({ publisherName: 'AgentRouter' }) } }
+  const check = configurePinnedUpdater(updater, { ...config, feed: 'https://github.com/owner/product/releases/latest/download/' }, () => '3.0.7', async url => {
+    urls.push(url.href)
+    assert.equal(urls.length, 1, 'Later checks must not depend on a new network request')
+    return fetcher()
+  })
+  await check.beforeDownload()
+  assert.equal(await updater.verifyUpdateCodeSignature(['AgentRouter'], path), null)
+  await check.afterDownload([path])
+  await check.afterDownload([path])
+  assert.deepEqual(urls, ['https://github.com/owner/product/releases/download/v3.0.7/agentrouter-update.json'])
+  await assert.rejects(check.afterDownload([join(work, 'modified.exe')]), { code: 'UPDATE_FILE_INVALID' })
+})
+
+test('a failed metadata request can retry, while selecting a different release requires its own signed manifest', async () => {
+  let version = '3.0.7', requests = 0
+  const updater = { verifyUpdateCodeSignature: async () => null, configOnDisk: { value: Promise.resolve({ publisherName: 'AgentRouter' }) } }
+  const check = configurePinnedUpdater(updater, config, () => version, async () => {
+    if (++requests === 1) throw new Error('temporary offline state')
+    return fetcher()
+  })
+  await assert.rejects(check.beforeDownload(), { code: 'UPDATE_METADATA_UNAVAILABLE' })
+  await check.beforeDownload()
+  await check.afterDownload([path])
+  assert.equal(requests, 2)
+  version = '3.0.8'
+  await assert.rejects(check.beforeDownload(), { code: 'UPDATE_METADATA_INVALID' })
+  assert.equal(requests, 3)
+})

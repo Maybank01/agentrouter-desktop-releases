@@ -98,28 +98,67 @@ async function readManifest(url, fetcher) {
 /** electron-updater's supported verifyUpdateCodeSignature callback. Errors
  * always reject installation; absence of Windows root trust is not a bypass.
  */
-export function createPinnedUpdateVerifier(config, getVersion, fetcher = fetch) {
+function verificationError(code, cause) {
+  return Object.assign(new Error(code, { cause }), { code })
+}
+
+function pinnedUpdateVerification(config, getVersion, fetcher) {
   validateSigningPolicy(config.policy)
   const feed = validateUpdateFeed(config.feed, config.testOnly)
-  return async (publishers, path) => {
+  let selectedVersion, manifestPromise
+  const prepare = async () => {
+    const version = getVersion()
+    assert.match(version, versionPattern)
+    if (selectedVersion !== version || !manifestPromise) {
+      selectedVersion = version
+      // A downloaded release remains valid when a newer release becomes latest.
+      // Pin GitHub metadata to the same immutable tag as the selected installer.
+      const base = new URL(feed)
+      if (base.origin === 'https://github.com' && /\/releases\/latest\/download\/$/.test(base.pathname)) {
+        base.pathname = base.pathname.replace(/\/releases\/latest\/download\/$/, `/releases/download/v${version}/`)
+      }
+      const operation = (async () => {
+        let envelope
+        try { envelope = await readManifest(new URL(manifestName, base), fetcher) }
+        catch (cause) { throw verificationError('UPDATE_METADATA_UNAVAILABLE', cause) }
+        try { return verifyUpdateManifest(envelope, config.policy, version) }
+        catch (cause) { throw verificationError('UPDATE_METADATA_INVALID', cause) }
+      })()
+      manifestPromise = operation
+      // A temporary transport failure must not poison all subsequent retries.
+      void operation.catch(() => { if (manifestPromise === operation) manifestPromise = undefined })
+    }
+    return { version, manifest: await manifestPromise }
+  }
+  const verifyFile = async path => {
+    const { version, manifest } = await prepare()
+    try { await verifyUpdateFile(manifest, path, `AgentRouter-${version}-x64-Setup.exe`) }
+    catch (cause) {
+      throw verificationError(['EACCES', 'EPERM', 'EBUSY'].includes(cause?.code)
+        ? 'UPDATE_CACHE_UNAVAILABLE' : 'UPDATE_FILE_INVALID', cause)
+    }
+  }
+  const hook = async (publishers, path) => {
     try {
       assert.ok(publishers.includes(config.policy.publisher))
-      const version = getVersion()
-      assert.match(version, versionPattern)
-      const envelope = await readManifest(new URL(manifestName, feed), fetcher)
-      const manifest = verifyUpdateManifest(envelope, config.policy, version)
-      await verifyUpdateFile(manifest, path, `AgentRouter-${version}-x64-Setup.exe`)
+      await verifyFile(path)
       return null
     } catch {
       return 'AgentRouter update signature verification failed. Check for updates and retry.'
     }
   }
+  return { prepare, verifyFile, hook }
+}
+
+export function createPinnedUpdateVerifier(config, getVersion, fetcher = fetch) {
+  return pinnedUpdateVerification(config, getVersion, fetcher).hook
 }
 
 /** Guard both the updater's normal path and its existing-download cache path. */
 export function configurePinnedUpdater(updater, config, getVersion, fetcher = fetch) {
   assert.equal(typeof updater.verifyUpdateCodeSignature, 'function', 'The installed updater lacks its signature-verifier interface')
-  const verifier = createPinnedUpdateVerifier(config, getVersion, fetcher)
+  const verification = pinnedUpdateVerification(config, getVersion, fetcher)
+  const verifier = verification.hook
   updater.verifyUpdateCodeSignature = verifier
   return {
     beforeDownload: async () => {
@@ -127,10 +166,13 @@ export function configurePinnedUpdater(updater, config, getVersion, fetcher = fe
       const settings = await updater.configOnDisk.value
       const publishers = Array.isArray(settings.publisherName) ? settings.publisherName : [settings.publisherName]
       assert.deepEqual(publishers, [config.policy.publisher], 'The installed updater must require its pinned publisher')
+      // Verify metadata before downloading. Later checks rehash the file against
+      // this authenticated manifest without requiring another network request.
+      await verification.prepare()
     },
     afterDownload: async paths => {
       assert.ok(Array.isArray(paths) && paths.length === 1)
-      assert.equal(await verifier([config.policy.publisher], paths[0]), null, 'The downloaded update failed signature verification')
+      await verification.verifyFile(paths[0])
     },
   }
 }

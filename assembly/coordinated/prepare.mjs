@@ -24,12 +24,19 @@ export function prepareSource() {
   const patch = join(directory, lock.patch)
   git(source, 'apply', '--check', patch)
   git(source, 'apply', patch)
+  // Regenerated patches must retain added shell assets. Git diff omits an
+  // untracked startup.html, otherwise producing a valid but unbootable app.
+  assert.match(readFileSync(join(source, 'apps/desktop/renderer/startup.html'), 'utf8'),
+    /id="status"/, 'The patched startup page must include its progress element')
   // One shared verifier is bundled into the native main process and also used
   // by independent release acceptance. It is part of the exported adapter.
   copyFileSync(join(directory, 'update-signature.mjs'), join(source, 'apps/desktop/src/agentrouter-update-signature.mjs'))
+  copyFileSync(join(directory, 'update-recovery.mjs'), join(source, 'apps/desktop/src/agentrouter-update-recovery.mjs'))
+  copyFileSync(join(directory, 'update-exit.mjs'), join(source, 'apps/desktop/src/agentrouter-update-exit.mjs'))
   copyFileSync(join(directory, 'update-routes.mjs'), join(source, 'apps/desktop/src/agentrouter-update-routes.mjs'))
   copyFileSync(join(directory, 'credential-recovery.mjs'), join(source, 'apps/desktop/src/agentrouter-credential-recovery.mjs'))
   copyFileSync(join(directory, 'external-navigation.mjs'), join(source, 'apps/desktop/src/agentrouter-external-navigation.mjs'))
+  copyFileSync(join(directory, 'runtime-recovery.mjs'), join(source, 'apps/desktop/src/agentrouter-runtime-recovery.mjs'))
   copyFileSync(join(directory, 'release-history.json'), join(source, 'apps/desktop/src/agentrouter-release-history.json'))
   const changes = git(source, 'diff', '--name-only').split('\n')
   assert.ok(changes.length > 0 && changes.every(path => path.startsWith('apps/desktop/') || path === 'apps/desktop-host/src/index.ts'))

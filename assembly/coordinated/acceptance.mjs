@@ -1,17 +1,19 @@
 /** Real Electron and offline profile installation; synthetic account only. */
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
-import { extractFile } from '@electron/asar'
 import { load, dump } from 'js-yaml'
 import { _electron, expect } from '@playwright/test'
 import { directory, root } from './prepare.mjs'
 import { assertExternalWebNavigation } from './external-navigation-acceptance.mjs'
 import { assertCredentialRecovery } from './credential-recovery-acceptance.mjs'
+import { assertRuntimeRecovery } from './runtime-recovery-acceptance.mjs'
+import { readInstalledProductVersion } from './installed-version.mjs'
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const legacyExecutable = process.argv.find(value => value.startsWith('--legacy-executable='))?.slice('--legacy-executable='.length)
@@ -78,6 +80,7 @@ const origin = `http://127.0.0.1:${gateway.address().port}`
 let app, page
 const launches = []
 let nativeUpdateMetrics
+let unrelatedProcess
 let externalBrowserNavigation = false
 const launch = async receipt => {
   const started = Date.now()
@@ -118,7 +121,20 @@ const launch = async receipt => {
       if (!found) await new Promise(resolve => setTimeout(resolve, 250))
     }
     assert.ok(found, 'The preceding public Desktop must boot its real Web carrier.')
-  } else await page.waitForURL('dsh-app://app/index.html', { timeout: 180000 })
+  } else {
+    if (page.url() === 'dsh-app://shell/startup.html') {
+      await expect.poll(async () => page.url() === 'dsh-app://app/index.html'
+        || await page.locator('#status').isVisible(), { timeout: 10000 }).toBe(true)
+    }
+    await page.waitForURL('dsh-app://app/index.html', { timeout: 180000 })
+    if (receipt.input.productVersion === candidate?.input.productVersion) {
+      await expect.poll(() => json(join(home, 'desktop/startup.json')).ready, { timeout: 10000 }).toBe(true)
+      const startup = json(join(home, 'desktop/startup.json'))
+      assert.ok(Number.isFinite(startup.maxMainThreadDelayMs) && startup.maxMainThreadDelayMs < 5000,
+        `Startup must keep the native window responsive, longest stall: ${startup.maxMainThreadDelayMs} ms`)
+      console.log(JSON.stringify({ phase: 'startup-responsive', startup }))
+    }
+  }
   await expect(page.getByRole('button', { name: '选择工作区', exact: true })).toBeVisible({ timeout: 90000 })
   const notice = page.getByRole('dialog', { name: '内测声明', exact: true })
   if (await notice.isVisible()) {
@@ -180,7 +196,17 @@ const launch = async receipt => {
   }
   console.log(JSON.stringify({ phase: 'ready', ...launches.at(-1) }))
 }
-const close = async () => { await app?.close(); app = undefined }
+const close = async () => {
+  const current = app
+  if (!current) return
+  let timeout
+  try {
+    await Promise.race([current.close(), new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('The isolated client did not close within 20 seconds')), 20000)
+    })])
+    app = undefined
+  } finally { clearTimeout(timeout) }
+}
 const request = (path, body) => page.evaluate(async ({ path, body }) => {
   const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST',
     ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) })
@@ -353,17 +379,54 @@ try {
       assert.equal((await api('updates/status')).canInstall, true)
       assert.equal(await app.evaluate(({ app }) => app.getVersion()), baseline.input.productVersion,
         'Download alone does not restart or activate the installer')
+      const pending = join(process.env.LOCALAPPDATA, '@agentrouterdesktop-updater/pending')
+      const pendingInfo = json(join(pending, 'update-info.json'))
+      assert.equal(pendingInfo.fileName, `AgentRouter-${candidate.input.productVersion}-x64-Setup.exe`)
+      const cachedInstaller = join(pending, pendingInfo.fileName)
+      const cachedDigest = createHash('sha512').update(readFileSync(cachedInstaller)).digest('base64')
+      assert.equal(cachedDigest, pendingInfo.sha512)
+      await close()
+      // Run the real NSIS Cancel flow against an identical disposable copy.
+      // The updater's original pending file must remain the exact byte source
+      // for the subsequent reopen/retry path.
+      const cancelInstaller = join(state, pendingInfo.fileName)
+      copyFileSync(cachedInstaller, cancelInstaller)
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        join(directory, 'update-cancel-acceptance.ps1'), '-Installer', cancelInstaller, '-InstallDirectory', dirname(candidate.executable)],
+      { env, windowsHide: true, stdio: 'inherit', timeout: 75000 })
+      assert.equal(readInstalledProductVersion(dirname(candidate.executable)),
+        baseline.input.productVersion, 'Cancel must preserve the installed version')
+      assert.equal(createHash('sha512').update(readFileSync(cachedInstaller)).digest('base64'), cachedDigest,
+        'Cancel must preserve the verified download')
+      await launch(baseline)
+      await api('updates/check', {})
+      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 60000 }).toBe('available')
+      await api('updates/download', { version: candidate.input.productVersion })
+      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 60000 }).toBe('ready')
+      const sibling = dirname(candidate.executable) + '-unrelated'
+      mkdirSync(sibling)
+      const siblingExecutable = join(sibling, 'AgentRouter.exe')
+      copyFileSync(process.execPath, siblingExecutable)
+      unrelatedProcess = spawn(siblingExecutable, ['-e', 'process.stdout.write("ready\\n");setInterval(()=>{},1000)'],
+        { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env })
+      await once(unrelatedProcess.stdout, 'data')
+      // Reproduce both startup-recovery and renderer-unload quit vetoes on the
+      // actual installed shell. Only the verified updater handoff may bypass them.
+      await app.evaluate(({ BrowserWindow }) => {
+        for (const window of BrowserWindow.getAllWindows()) window.setClosable(false)
+      })
+      await page.evaluate(() => { window.onbeforeunload = () => false })
       await prepareStaleRegistryMetadata()
       const modulesPath = join(profile, 'node_modules/.modules.yaml')
       const modulesBefore = { bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }
       const restartStarted = Date.now()
-      const closing = app.waitForEvent('close', { timeout: 300000 })
+      const closing = app.waitForEvent('close', { timeout: 45000 })
       await api('updates/install', { version: candidate.input.productVersion, interrupt: false })
       await closing
       app = undefined
       await expect.poll(() => {
         try {
-          return JSON.parse(extractFile(join(dirname(candidate.executable), 'resources/app.asar'), 'package.json').toString()).version
+          return readInstalledProductVersion(dirname(candidate.executable))
         } catch { return undefined }
       }, { timeout: 180000 }).toBe(candidate.input.productVersion)
       console.log(JSON.stringify({ phase: 'installer-replaced-app', productVersion: candidate.input.productVersion }))
@@ -382,7 +445,10 @@ try {
       assert.ok(startup.visibleMs < 10000, 'Update restart must show its startup window within ten seconds')
       assert.ok(startup.durationMs < 30000, 'An unchanged runtime must become ready within thirty seconds')
       assert.deepEqual({ bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }, modulesBefore)
-      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true }
+      assert.equal(unrelatedProcess.exitCode, null, 'Installer must leave the same-name sibling process running')
+      unrelatedProcess.kill(); unrelatedProcess = undefined
+      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true,
+        cancelledInstallerRetried: true, verifiedDownloadRetained: true, quitVetoHandled: true, unrelatedProcessPreserved: true }
       console.log(JSON.stringify({ nativeUpdateMetrics }))
       const processEnv = { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }
       await expect.poll(() => Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
@@ -454,9 +520,12 @@ try {
       assert.deepEqual({ text: readFileSync(modules, 'utf8'), mtime: statSync(modules).mtimeMs }, beforeStartup)
     }
   }
-  let credentialRecovery
+  let credentialRecovery, runtimeRecovery
   if (!candidate && !legacyExecutable) {
     await close()
+    if (process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+      runtimeRecovery = await assertRuntimeRecovery({ executablePath: baseline.executable, state, home, electronHome, env })
+    }
     credentialRecovery = await assertCredentialRecovery({ executablePath: baseline.executable, state, home, electronHome, env })
     await launch(baseline)
     assert.equal((await api('status')).connected, false)
@@ -474,13 +543,35 @@ try {
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
     thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
-    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, launches })
+    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, runtimeRecovery, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   if (candidate) writeFileSync(join(candidate.output, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))
 } catch (error) {
   console.error(error)
   if (existsSync(join(state, 'startup-error.log'))) console.error(readFileSync(join(state, 'startup-error.log'), 'utf8'))
+  if (existsSync(join(home, 'desktop/startup.json'))) console.error(readFileSync(join(home, 'desktop/startup.json'), 'utf8'))
+  if (page && !page.isClosed()) console.error(JSON.stringify({ failedPage: page.url() }))
+  if (nativeUpdate && process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+    if (existsSync(join(state, 'electron.log'))) console.error(readFileSync(join(state, 'electron.log'), 'utf8').slice(-16000))
+    try {
+      console.error(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        join(directory, 'installer-diagnostics.ps1')], { encoding: 'utf8', windowsHide: true, timeout: 15000 }))
+    } catch { console.error('Installer window diagnostics were unavailable') }
+  }
   console.error(`Acceptance state: ${state}`)
   throw error
-} finally { await close(); await new Promise(resolve => gateway.close(resolve)) }
+} finally {
+  unrelatedProcess?.kill()
+  try { await close() }
+  catch (error) {
+    // This is cleanup after acceptance failed, never proof of a successful
+    // updater handoff. Kill only the process launched by this isolated driver.
+    console.error(error)
+    app?.process().kill()
+    throw error
+  } finally {
+    gateway.closeAllConnections()
+    await new Promise(resolve => gateway.close(resolve))
+  }
+}
