@@ -380,6 +380,7 @@ jobs:
   coordinated_signed_update:
     name: Signed native update and restart
     needs: coordinated_sign
+    if: ${{ !cancelled() && needs.coordinated_sign.result == 'success' }}
     runs-on: windows-2025
     environment: windows-signing
     timeout-minutes: 45
@@ -442,6 +443,7 @@ jobs:
   coordinated_signed_legacy:
     name: Signed legacy Profile migration
     needs: coordinated_sign
+    if: ${{ !cancelled() && needs.coordinated_sign.result == 'success' }}
     runs-on: windows-2025
     timeout-minutes: 45
     permissions:
@@ -489,6 +491,7 @@ jobs:
   coordinated_signed_install:
     name: Install signed bytes on a clean worker
     needs: coordinated_sign
+    if: ${{ !cancelled() && needs.coordinated_sign.result == 'success' }}
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -556,3 +559,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node assembly/coordinated-release.mjs publish .local/signed-release
+  coordinated_outcome:
+    name: Require the requested publication
+    # A requested publication must never report success while any gate was
+    # skipped: GitHub skips dependants of a skipped job unless told otherwise.
+    needs: [coordinated_evidence, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.delivery == 'coordinated' && inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Fail unless the release was published
+        env:
+          PUBLISH_RESULT: ${{ needs.coordinated_publish.result }}
+        run: |
+          if [ "$PUBLISH_RESULT" != "success" ]; then
+            echo "::error::Publication was requested but the publish job result is '$PUBLISH_RESULT'"
+            exit 1
+          fi
