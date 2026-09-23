@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "76cd84052a263682bb16fa0dd40a3166546cc19c",
+  "commit": "49040894c3fd04e74e66e909f1fe214769deb10d",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 37273,
-      "sha256": "5cb746f677ae302c836ce4df2cd08a3be569c34e550a71e598d06cb79cc57b55"
+      "bytes": 37629,
+      "sha256": "3562bc11eac69a12ea5c4b8f688d994bab0c00cb57cd8026209ee9c72b17add0"
     },
     {
       "path": "agentrouter-icon.svg",
@@ -82,8 +82,8 @@
     },
     {
       "path": "test.mjs",
-      "bytes": 879,
-      "sha256": "982d78c61f15c141db441f54f425eef87507e0bd9207923b84e85e309f798562"
+      "bytes": 900,
+      "sha256": "e85c6c8c26deec4e4b3d4912ac29a98b82d920b5ae5d847b3fe27ce97362fdda"
     },
     {
       "path": "upstream.lock.json",
@@ -254,6 +254,21 @@
       "path": "installed-version.test.mjs",
       "bytes": 1800,
       "sha256": "cabf458c273b0bc6e8e531170dc47dc799bb9275a09a36256bc72cb95cf917a6"
+    },
+    {
+      "path": "installed-process.mjs",
+      "bytes": 2154,
+      "sha256": "aa9adc06c6a5fe44d972884e8b9bc9f4348cabe43e571915d233a410cdf9a58d"
+    },
+    {
+      "path": "installed-process.ps1",
+      "bytes": 974,
+      "sha256": "88498b37465f12befc3b3c2863f66b7a622fd0c8c40b3d4625cb6d96effd5537"
+    },
+    {
+      "path": "installed-process.test.mjs",
+      "bytes": 2363,
+      "sha256": "9af08c348e0195966fe983893e52071c553b15a3886579e6b13995c75710fbbc"
     }
   ]
 }
