@@ -277,7 +277,7 @@ jobs:
           RETAIN_PLUGIN_REASON: ${{ inputs.retain_plugin_reason }}
         run: node assembly/coordinated-inputs.mjs
       - run: npm test
-      - run: npm ci --ignore-scripts --prefix assembly/coordinated
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
       - run: node assembly/coordinated/test.mjs
       - id: accept
         run: node assembly/coordinated-candidate.mjs
@@ -301,7 +301,7 @@ jobs:
         with:
           node-version: 24.15.0
       - run: npm test
-      - run: npm ci --ignore-scripts --prefix assembly/coordinated
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
       - name: Build the reviewed source with the public plugin
         id: build
         shell: pwsh
@@ -378,7 +378,7 @@ jobs:
         with:
           node-version: 24.15.0
       - run: npm test
-      - run: npm ci --ignore-scripts --prefix assembly/coordinated
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
       - name: Download the exact draft assets
         shell: pwsh
         env:

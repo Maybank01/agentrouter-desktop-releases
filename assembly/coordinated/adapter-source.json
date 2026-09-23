@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "6287bf123e0df85d72b8e922c584e89a49279baf",
+  "commit": "b0009e63a9412476e5644d46cba00826b0554965",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -27,8 +27,8 @@
     },
     {
       "path": "build.mjs",
-      "bytes": 12039,
-      "sha256": "b886f8103be498782b8a9dfc1400bfef6a949cb389633f057884e29c9014a519"
+      "bytes": 12245,
+      "sha256": "5f0dc076eb79f07f2f4418c9b1cc1a7aa93733328ab2e19a8f031f15340982e9"
     },
     {
       "path": "coordinated-delivery.patch",
@@ -82,8 +82,8 @@
     },
     {
       "path": "test.mjs",
-      "bytes": 900,
-      "sha256": "e85c6c8c26deec4e4b3d4912ac29a98b82d920b5ae5d847b3fe27ce97362fdda"
+      "bytes": 917,
+      "sha256": "65799f069d818c3a31fe82f19cb7e461d760de53cb1cc72801f93ff921086e2c"
     },
     {
       "path": "upstream.lock.json",
@@ -269,6 +269,16 @@
       "path": "installed-process.test.mjs",
       "bytes": 2363,
       "sha256": "9af08c348e0195966fe983893e52071c553b15a3886579e6b13995c75710fbbc"
+    },
+    {
+      "path": "install-retry.mjs",
+      "bytes": 2314,
+      "sha256": "fd5e0491fcb3cb705d9c6faad962a27bc45a1bfb6c300b5972d1f8295f50838e"
+    },
+    {
+      "path": "install-retry.test.mjs",
+      "bytes": 2055,
+      "sha256": "1f64221e5d0e7e99f42785e2fa2d33d9e10319bdff243389b212d4e47ea34045"
     }
   ]
 }

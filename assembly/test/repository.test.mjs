@@ -39,6 +39,12 @@ test('optional Desktop publication is manually dispatched on main and never foll
     assert.match(ci, new RegExp(`- scenario: ${scenario}\\r?\\n`), scenario)
   }
   assert.doesNotMatch(ci, /continue-on-error/)
+  // Every npm ci step goes through the single frozen-install retry wrapper.
+  for (const workflow of [ci, readFileSync(join(directory, 'release.yml'), 'utf8')]) {
+    const installs = workflow.match(/^.*npm ci .*$/gm) ?? []
+    assert.ok(installs.length > 0)
+    for (const line of installs) assert.match(line, /run: node assembly\/retry-install\.mjs npm ci --ignore-scripts --prefix assembly\/coordinated\r?$/)
+  }
   assert.match(ci, /github\.workflow_sha/)
   assert.match(ci, /adapter-source\.json/)
   assert.doesNotMatch(ci, /npm publish|PUBLIC_RELEASE_APP|secrets\.|contents: write|workflow_call:|pull_request_target:|upload-artifact|actions\/cache|self-hosted|repository:\s*Maybank01\//u)

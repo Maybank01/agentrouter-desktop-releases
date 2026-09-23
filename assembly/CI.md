@@ -120,3 +120,13 @@ migration on the same installation, and signed native update acceptance keeps
 identity summary in every Windows job. Branch protection is not configured on
 main; if it is added, require the four Windows check names above plus
 `Source boundaries and provenance`.
+
+### Dependency install retries
+
+Every workflow `npm ci` step runs through `assembly/retry-install.mjs`, which
+accepts only `npm ci` with plain arguments, repeats it once with the same frozen
+lockfile, and fails with each decoded exit reason (for example `0xC0000409`, a
+native fail-fast crash that prints no error). The exported `build.mjs` applies
+the same single retry to its seed `pnpm install --lockfile-only` and
+`pnpm fetch --prod`, and the thrown error carries the pnpm stderr/stdout tails.
+A retry that succeeds is shown as a workflow warning, not hidden.
