@@ -28,8 +28,9 @@
    gh run view <run-id> --repo Maybank01/agentrouter-desktop-releases
    ```
 
-4. 确认 Ubuntu 和 Windows 两个 job 全部成功。Windows 必须完成适配器事务测试、
-   pnpm store 迁移、真实 NSIS 安装、原生更新下载/重启和旧 Profile 迁移。
+4. 确认 run 中所有 job 全部成功：Ubuntu 源码边界，以及并行的四个 Windows job——
+   适配器事务测试与 pnpm store 迁移、原生更新下载/重启、旧 Profile 迁移、
+   全新安装后的运行文件/凭据恢复。任一 job 失败、跳过或取消都不构成完整验收；
    已排队、运行器启动或仅边界检查通过，均不是完整验收。
 
 CI 的 summary 记录源提交、导出清单摘要、执行仓库提交、workflow 提交、run 和 attempt；
@@ -88,3 +89,44 @@ receipt. Signed recovery preserves original input without chasing a newer tag.
 This follow-up is documentation only. Its CI should run source/provenance tests
 and skip the unchanged installer. A 39-second unchanged-host check is not a claim
 that the full signed release now meets the 600-second delivery objective.
+
+## 2026-09-23: parallel installed scenarios
+
+The former single Windows job (about 16.5 minutes) is split into jobs that run
+in parallel on separate disposable `windows-2025` workers, all gated by the
+same `ci-scope` output:
+
+| Check name | Command |
+| --- | --- |
+| Adapter transactions and pnpm store migration | `npm test`, `node assembly/coordinated/test.mjs`, `store-migration-acceptance.mjs` |
+| Installed native update and restart | `node assembly/coordinated-candidate.mjs --scenario=native-updater` |
+| Installed legacy Profile migration | `node assembly/coordinated-candidate.mjs --scenario=legacy-migration` |
+| Installed fresh install with runtime and credential recovery | `node assembly/coordinated-candidate.mjs --scenario=fresh-install-recovery` |
+
+Each installed job builds the exact exported target itself. `native-updater`
+also builds the baseline and packages both installers concurrently.
+`legacy-migration` installs the target fresh, so it no longer depends on the
+native update's state. `fresh-install-recovery` runs the single-install path
+used by signed installed acceptance (runtime recovery, credential recovery and
+external browser navigation) before any version is signed. Each receipt names
+its scenario and `coordinated-candidate.mjs` rejects a receipt for another
+scenario. The matrix uses `fail-fast: false`; acceptance still requires every
+job to succeed. Test installers remain on each disposable worker.
+
+`release.yml` is unchanged: it calls `coordinated-candidate.mjs` without a
+scenario and keeps the full sequential native update followed by legacy
+migration on the same installation, and signed native update acceptance keeps
+`--signed-installer`. `assembly/ci-identity.mjs` writes the source/executor
+identity summary in every Windows job. Branch protection is not configured on
+main; if it is added, require the four Windows check names above plus
+`Source boundaries and provenance`.
+
+### Dependency install retries
+
+Every workflow `npm ci` step runs through `assembly/retry-install.mjs`, which
+accepts only `npm ci` with plain arguments, repeats it once with the same frozen
+lockfile, and fails with each decoded exit reason (for example `0xC0000409`, a
+native fail-fast crash that prints no error). The exported `build.mjs` applies
+the same single retry to its seed `pnpm install --lockfile-only` and
+`pnpm fetch --prod`, and the thrown error carries the pnpm stderr/stdout tails.
+A retry that succeeds is shown as a workflow warning, not hidden.

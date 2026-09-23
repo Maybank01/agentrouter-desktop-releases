@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "8f7bf0e0a289f24e61c89ee5115b7a65df310c3b",
+  "commit": "b0009e63a9412476e5644d46cba00826b0554965",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 37836,
-      "sha256": "de9d539bfa1b67b62ea2e8acbcae14d63d8dce9b541f8bfddb54b515a86b3310"
+      "bytes": 35264,
+      "sha256": "77e26e1f7232b4ddd6bdc9363b868abe8065efa6a321846549651a69614b8aae"
     },
     {
       "path": "agentrouter-icon.svg",
@@ -27,8 +27,8 @@
     },
     {
       "path": "build.mjs",
-      "bytes": 12039,
-      "sha256": "b886f8103be498782b8a9dfc1400bfef6a949cb389633f057884e29c9014a519"
+      "bytes": 12245,
+      "sha256": "5f0dc076eb79f07f2f4418c9b1cc1a7aa93733328ab2e19a8f031f15340982e9"
     },
     {
       "path": "coordinated-delivery.patch",
@@ -37,13 +37,13 @@
     },
     {
       "path": "installer-acceptance.mjs",
-      "bytes": 10162,
-      "sha256": "fd00a83d6c69a2ba20da95425ca25cfea4a2ec4284786c81be0f7527430e6df5"
+      "bytes": 12311,
+      "sha256": "34ff527fa6c51a7ece745e44890cdde0f5625c37311dbdaa8b0958003e6810a1"
     },
     {
       "path": "installer-baseline.json",
-      "bytes": 568,
-      "sha256": "2bd66d61a9972a2b1fd6d13793180453b97b2bc8709e71c515d8c54ad94bd046"
+      "bytes": 211,
+      "sha256": "2fe469ca2370fe2ec6f6d2b77f4bc8e79ece7b8be20bf2a121de12a4e32648a8"
     },
     {
       "path": "legacy-installer.json",
@@ -82,8 +82,8 @@
     },
     {
       "path": "test.mjs",
-      "bytes": 900,
-      "sha256": "e85c6c8c26deec4e4b3d4912ac29a98b82d920b5ae5d847b3fe27ce97362fdda"
+      "bytes": 917,
+      "sha256": "65799f069d818c3a31fe82f19cb7e461d760de53cb1cc72801f93ff921086e2c"
     },
     {
       "path": "upstream.lock.json",
@@ -222,8 +222,8 @@
     },
     {
       "path": "external-navigation-acceptance.mjs",
-      "bytes": 2442,
-      "sha256": "988274d3878ee84c641a0fbd0c869c127da49b7bd4ad9cc19d97f2ae3478bd76"
+      "bytes": 2698,
+      "sha256": "ef4a0fda116a061e95f26dd8c428db20116cc9fd0d9e2a32d109c714821d6c1b"
     },
     {
       "path": "runtime-recovery.mjs",
@@ -269,6 +269,16 @@
       "path": "installed-process.test.mjs",
       "bytes": 2363,
       "sha256": "9af08c348e0195966fe983893e52071c553b15a3886579e6b13995c75710fbbc"
+    },
+    {
+      "path": "install-retry.mjs",
+      "bytes": 2314,
+      "sha256": "fd5e0491fcb3cb705d9c6faad962a27bc45a1bfb6c300b5972d1f8295f50838e"
+    },
+    {
+      "path": "install-retry.test.mjs",
+      "bytes": 2055,
+      "sha256": "1f64221e5d0e7e99f42785e2fa2d33d9e10319bdff243389b212d4e47ea34045"
     }
   ]
 }

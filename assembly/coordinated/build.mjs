@@ -10,6 +10,7 @@ import { valid } from 'semver'
 import { load as loadYaml } from 'js-yaml'
 import { register } from 'tsx/esm/api'
 import { directory, root, lock, prepareSource } from './prepare.mjs'
+import { runInstall } from './install-retry.mjs'
 register()
 
 const input = JSON.parse(readFileSync(resolve(process.argv[2] ?? join(directory, 'release.json')), 'utf8'))
@@ -110,8 +111,10 @@ for (const key of Object.keys(env)) if (/API_KEY|CODEX_HOME|RELAY_CODEX|NODE_OPT
 writeFileSync(join(output, 'npmrc'), 'registry=https://registry.npmjs.org/\n')
 env.NPM_CONFIG_USERCONFIG = join(output, 'npmrc')
 const pnpm = join(directory, 'node_modules/pnpm/bin/pnpm.mjs')
-execFileSync(process.execPath, [pnpm, `--config.store-dir=${store}`, '--config.enable-global-virtual-store=false',
-  'install', '--lockfile-only'], { cwd: seed, env, stdio: 'inherit', windowsHide: true, timeout: 480000 })
+// Both seed commands are repeatable with the same inputs; a transient native
+// pnpm crash gets one retry and a failure names its exit status and output.
+runInstall(process.execPath, [pnpm, `--config.store-dir=${store}`, '--config.enable-global-virtual-store=false',
+  'install', '--lockfile-only'], { cwd: seed, env, timeout: 480000 }, { label: 'Seed pnpm lockfile resolution' })
 const runtimeIdentity = { dsh: input.dshVersion, node: process.versions.node,
   pnpm: json(join(directory, 'node_modules/pnpm/package.json')).version,
   files: ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'desktop-packages.json']
@@ -121,8 +124,8 @@ writeJson(join(seed, 'desktop-release.json'), { ...json(join(seed, 'desktop-rele
 const seedLock = loadYaml(readFileSync(join(seed, 'pnpm-lock.yaml'), 'utf8'))
 assert.equal(seedLock.packages[`${input.plugin.name}@${input.plugin.version}`].resolution.integrity, input.plugin.integrity,
   'The seed must resolve the same published plugin bytes verified before assembly.')
-execFileSync(process.execPath, [pnpm, `--config.store-dir=${store}`, '--config.enable-global-virtual-store=false',
-  'fetch', '--prod'], { cwd: seed, env, stdio: 'inherit', windowsHide: true, timeout: 480000 })
+runInstall(process.execPath, [pnpm, `--config.store-dir=${store}`, '--config.enable-global-virtual-store=false',
+  'fetch', '--prod'], { cwd: seed, env, timeout: 480000 }, { label: 'Seed pnpm store fetch' })
 const fetchedModules = resolve(seed, 'node_modules')
 assert.ok(fetchedModules.startsWith(resolve(output) + sep))
 rmSync(fetchedModules, { recursive: true, force: true })

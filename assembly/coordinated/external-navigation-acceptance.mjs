@@ -24,7 +24,10 @@ export async function assertExternalWebNavigation(app, page) {
       link.style.cssText = 'position:fixed;top:0;left:0;z-index:2147483647;background:white;padding:12px'
       document.body.append(link)
     }, authorization)
-    await page.locator('#agentrouter-external-navigation-acceptance').click()
+    // Activate the anchor itself: on a fresh install the first-run onboarding
+    // <dialog> sits in the top layer and intercepts pointer clicks, although the
+    // packaged link handler under test is the same either way.
+    await page.evaluate(() => document.getElementById('agentrouter-external-navigation-acceptance').click())
     await expect.poll(opened).toEqual([authorization])
     await page.evaluate(url => { window.open(url, '_blank', 'noopener,noreferrer') }, popup)
     await expect.poll(opened).toEqual([authorization, popup])

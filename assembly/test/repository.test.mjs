@@ -25,11 +25,26 @@ test('optional Desktop publication is manually dispatched on main and never foll
   assert.match(ci, /workflow_dispatch:/)
   assert.match(ci, /runs-on: ubuntu-latest/)
   assert.match(ci, /runs-on: windows-2025/)
-  assert.equal((ci.match(/persist-credentials: false/g) ?? []).length, 2)
+  assert.equal((ci.match(/persist-credentials: false/g) ?? []).length, 3)
+  assert.equal((ci.match(/runs-on: windows-2025/g) ?? []).length, 2)
   for (const command of ['npm test', 'git diff --check',
     'npm ci --ignore-scripts --prefix assembly/coordinated',
     'node assembly/coordinated/test.mjs', 'node assembly/coordinated/store-migration-acceptance.mjs',
-    'node assembly/coordinated-candidate.mjs']) assert.ok(ci.includes(command), command)
+    'node assembly/coordinated-candidate.mjs --scenario=${{ matrix.scenario }}']) assert.ok(ci.includes(command), command)
+  // Installed checks run as parallel scenarios, all gated by the change scope and
+  // all required; none may be silently dropped from the matrix.
+  assert.equal((ci.match(/if: needs\.bootstrap\.outputs\.installed == 'true'/g) ?? []).length, 2)
+  assert.match(ci, /fail-fast: false/)
+  for (const scenario of ['native-updater', 'legacy-migration', 'fresh-install-recovery']) {
+    assert.match(ci, new RegExp(`- scenario: ${scenario}\\r?\\n`), scenario)
+  }
+  assert.doesNotMatch(ci, /continue-on-error/)
+  // Every npm ci step goes through the single frozen-install retry wrapper.
+  for (const workflow of [ci, readFileSync(join(directory, 'release.yml'), 'utf8')]) {
+    const installs = workflow.match(/^.*npm ci .*$/gm) ?? []
+    assert.ok(installs.length > 0)
+    for (const line of installs) assert.match(line, /run: node assembly\/retry-install\.mjs npm ci --ignore-scripts --prefix assembly\/coordinated\r?$/)
+  }
   assert.match(ci, /github\.workflow_sha/)
   assert.match(ci, /adapter-source\.json/)
   assert.doesNotMatch(ci, /npm publish|PUBLIC_RELEASE_APP|secrets\.|contents: write|workflow_call:|pull_request_target:|upload-artifact|actions\/cache|self-hosted|repository:\s*Maybank01\//u)
@@ -48,6 +63,10 @@ test('optional Desktop publication is manually dispatched on main and never foll
   assert.match(release, /npm run assembly:refresh-lock/)
   assert.match(release, /npm run build:win/)
   assert.match(release, /contents: write/)
+  // Release acceptance keeps the full sequential native update + legacy migration.
+  const coordinatedRelease = readFileSync(join(directory, 'release.yml'), 'utf8')
+  assert.match(coordinatedRelease, /run: node assembly\/coordinated-candidate\.mjs\r?\n/)
+  assert.doesNotMatch(coordinatedRelease, /--scenario/)
   assert.equal((release.match(/GH_TOKEN: \$\{\{ github\.token \}\}/g) ?? []).length, 2)
   assert.equal((release.match(/persist-credentials: false/g) ?? []).length, 2)
   assert.match(release, /GITHUB_REPOSITORY/)
