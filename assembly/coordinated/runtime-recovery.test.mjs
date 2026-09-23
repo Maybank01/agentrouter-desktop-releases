@@ -40,6 +40,7 @@ test('runtime recovery keeps cancellation and uses the exact existing product re
     const dialog = runtimeRecoveryDialog(chinese)
     assert.equal(dialog.cancelId, 2)
     assert.equal(dialog.buttons.length, 3)
+    assert.equal(dialog.noLink, true)
   }
   assert.equal(repairInstallerUrl('3.0.15'), 'https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v3.0.15/AgentRouter-3.0.15-x64-Setup.exe')
   assert.throws(() => repairInstallerUrl('3.0.15/../../latest'))

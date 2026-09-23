@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "49040894c3fd04e74e66e909f1fe214769deb10d",
+  "commit": "7c30df8f5707630e48bb1e101c3e436f8dd5d18d",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -73,7 +73,7 @@
     {
       "path": "release.json",
       "bytes": 711,
-      "sha256": "ecae3157793e0566dde2157776fbabb3a31b2289a4287d58bb01d02d8a7d3816"
+      "sha256": "df3d4c985198ba539924d579637cddd9edc7cea42ec433b8e968c429120d1c64"
     },
     {
       "path": "store-migration-acceptance.mjs",
@@ -188,7 +188,7 @@
     {
       "path": "release-history.json",
       "bytes": 3341,
-      "sha256": "b4724727ddff569f5e29892efaf4debc8ecea033c76c66f1fd16e3ed95ee238b"
+      "sha256": "beea516df28740dd777d1173322f771fb196269820d019e5b42018019e20d444"
     },
     {
       "path": "update-center.md",
@@ -227,13 +227,13 @@
     },
     {
       "path": "runtime-recovery.mjs",
-      "bytes": 3156,
-      "sha256": "3a5d5209dec4740773d9ea8afdce6bdf9a74e7d62e289d4b886a161f241f5533"
+      "bytes": 3335,
+      "sha256": "5c9373470bb9caf66fe08430383e8adeb4a2ad830f0e923c639af3dab8ac6583"
     },
     {
       "path": "runtime-recovery.test.mjs",
-      "bytes": 2311,
-      "sha256": "cc51c9b6715b9eb3c9e1cc07fc71ebd6134f33a6926127e0f039628e1f44dfaf"
+      "bytes": 2349,
+      "sha256": "6d05e9d90f7c16d12b3956ab0f3645185687cbb88c3781058053b72f11d33c8f"
     },
     {
       "path": "runtime-recovery-acceptance.mjs",

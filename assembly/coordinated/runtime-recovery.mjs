@@ -58,7 +58,9 @@ export function runtimeRecoveryDialog(chinese) {
       ? '请检查更新，或下载当前版本安装包覆盖安装。账号、配置和会话会保留。'
       : 'Check for an update, or download this version again and install it over the existing application. Accounts, settings and sessions are preserved.',
     buttons: chinese ? ['检查更新…', '下载修复安装包', '稍后'] : ['Check for updates…', 'Download repair installer', 'Later'],
-    defaultId: 0, cancelId: 2,
+    // Windows otherwise renders unrecognised labels as TaskDialog command links,
+    // which drops the ordinary cancel button that users and UI Automation expect.
+    defaultId: 0, cancelId: 2, noLink: true,
   }
 }
 
