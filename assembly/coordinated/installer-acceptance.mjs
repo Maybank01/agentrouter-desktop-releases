@@ -105,6 +105,10 @@ try {
   await node('acceptance.mjs', [installedBaseline, installedTarget, '--native-update'], 'native-updater')
   const update = json(join(target.output, 'acceptance.json'))
   assert.equal(update.installerUpgrade, true)
+  assert.equal(update.nativeUpdateMetrics.cancelledInstallerRetried, true)
+  assert.equal(update.nativeUpdateMetrics.verifiedDownloadRetained, true)
+  assert.equal(update.nativeUpdateMetrics.quitVetoHandled, true)
+  assert.equal(update.nativeUpdateMetrics.unrelatedProcessPreserved, true)
   assert.ok(requests.includes('latest.yml') && requests.some(name => name === targetPackage.assets.find(asset => asset.name.endsWith('.exe')).name))
   if (signedTarget) assert.ok(requests.includes('agentrouter-update.json'), 'The installed native updater must request and verify the signed manifest')
 

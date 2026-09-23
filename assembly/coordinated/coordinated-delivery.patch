@@ -284,10 +284,10 @@ index d057d6d..970a2b5 100644
    readonly type: 'ready'
    readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..8dcadcd 100644
+index 8bc9fdc..51025da 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
-@@ -1,7 +1,7 @@
+@@ -1,15 +1,17 @@
  /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
  
 -import { readFile, writeFile } from 'node:fs/promises'
@@ -297,7 +297,9 @@ index 8bc9fdc..8dcadcd 100644
  import { fileURLToPath } from 'node:url'
  import {
    app,
-@@ -10,6 +10,7 @@ import {
++  autoUpdater as nativeAutoUpdater,
+   BrowserWindow,
+   dialog,
    ipcMain,
    Menu,
    protocol,
@@ -305,7 +307,7 @@ index 8bc9fdc..8dcadcd 100644
    type IpcMainInvokeEvent,
  } from 'electron'
  import { resolveDesktopPaths } from './paths.ts'
-@@ -19,6 +20,10 @@ import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
+@@ -19,6 +21,11 @@ import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
  import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
  import { claimDesktopSingleInstance } from './single-instance.ts'
  import { DesktopUpdateCoordinator } from './update-coordinator.ts'
@@ -313,10 +315,11 @@ index 8bc9fdc..8dcadcd 100644
 +import updateHistory from './agentrouter-release-history.json'
 +import { inspectCredentialStartupFailure, backupInvalidCredentials, credentialRecoveryDialog } from './agentrouter-credential-recovery.mjs'
 +import { installExternalWebNavigation } from './agentrouter-external-navigation.mjs'
++import { installUpdateExitHandler } from './agentrouter-update-exit.mjs'
  
  const SCHEME = 'dsh-app'
  let focusPrimaryWindow = (): void => {}
-@@ -44,6 +49,7 @@ const MIME: Readonly<Record<string, string>> = {
+@@ -44,6 +51,7 @@ const MIME: Readonly<Record<string, string>> = {
    '.html': 'text/html; charset=utf-8',
    '.js': 'text/javascript; charset=utf-8',
    '.svg': 'image/svg+xml',
@@ -324,7 +327,7 @@ index 8bc9fdc..8dcadcd 100644
  }
  
  interface RuntimeResources {
-@@ -79,8 +85,11 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+@@ -79,8 +87,11 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
    return port
  }
  
@@ -337,7 +340,7 @@ index 8bc9fdc..8dcadcd 100644
      width: 1280,
      height: 840,
      minWidth: 880,
-@@ -94,9 +103,18 @@ function createWindow(preload: string): BrowserWindow {
+@@ -94,9 +105,18 @@ function createWindow(preload: string): BrowserWindow {
        webSecurity: true,
      },
    })
@@ -359,7 +362,7 @@ index 8bc9fdc..8dcadcd 100644
    })
    return window
  }
-@@ -131,6 +149,7 @@ async function serveShellAsset(request: Request): Promise<Response> {
+@@ -131,6 +151,7 @@ async function serveShellAsset(request: Request): Promise<Response> {
  }
  
  async function main(): Promise<void> {
@@ -367,7 +370,7 @@ index 8bc9fdc..8dcadcd 100644
    const resources = runtimeResources()
    const paths = resolveDesktopPaths()
    const development = developmentProject()
-@@ -147,9 +166,75 @@ async function main(): Promise<void> {
+@@ -147,9 +168,75 @@ async function main(): Promise<void> {
    const messages = locale.messages
    const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
    const managementPreload = fileURLToPath(new URL('./preload.cjs', import.meta.url))
@@ -443,7 +446,7 @@ index 8bc9fdc..8dcadcd 100644
      for (const window of BrowserWindow.getAllWindows()) {
        window.webContents.send(DESKTOP_IPC.updatesState, state)
      }
-@@ -158,7 +243,8 @@ async function main(): Promise<void> {
+@@ -158,7 +245,8 @@ async function main(): Promise<void> {
  
    const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
      const next = new DesktopHostProcess(resources.node, projectDir, hostInspectPort)
@@ -453,7 +456,7 @@ index 8bc9fdc..8dcadcd 100644
      return next
    }
    const hooks: DesktopProjectHooks = {
-@@ -204,16 +290,21 @@ async function main(): Promise<void> {
+@@ -204,16 +292,21 @@ async function main(): Promise<void> {
  
    if (development === undefined) {
      await manager.applyRelease(resources.seed, app.getVersion(), {
@@ -475,7 +478,7 @@ index 8bc9fdc..8dcadcd 100644
        shellInstallerOwnsQuit = true
        const active = host
        host = undefined
-@@ -221,15 +312,15 @@ async function main(): Promise<void> {
+@@ -221,15 +314,15 @@ async function main(): Promise<void> {
      },
    )
  
@@ -498,7 +501,7 @@ index 8bc9fdc..8dcadcd 100644
    const mutate = async (event: IpcMainInvokeEvent, mutation: Parameters<DesktopProjectManager['mutate']>[0]): Promise<void> => {
      assertDesktopSender(event, ['shell'])
      if (development !== undefined) {
-@@ -272,6 +363,7 @@ async function main(): Promise<void> {
+@@ -272,6 +365,7 @@ async function main(): Promise<void> {
  
    const checkAndPrompt = async (manual: boolean): Promise<void> => {
      const state = await updates.check()
@@ -506,7 +509,7 @@ index 8bc9fdc..8dcadcd 100644
      if (state.phase === 'error') {
        if (manual) {
          await dialog.showMessageBox({
-@@ -282,7 +374,7 @@ async function main(): Promise<void> {
+@@ -282,7 +376,7 @@ async function main(): Promise<void> {
        }
        return
      }
@@ -515,7 +518,7 @@ index 8bc9fdc..8dcadcd 100644
        if (manual) {
          await dialog.showMessageBox({
            type: 'info',
-@@ -317,9 +409,8 @@ async function main(): Promise<void> {
+@@ -317,9 +411,8 @@ async function main(): Promise<void> {
        pluginWindow.focus()
        return
      }
@@ -526,7 +529,7 @@ index 8bc9fdc..8dcadcd 100644
      pluginWindow.once('ready-to-show', () => { pluginWindow?.show() })
      pluginWindow.once('closed', () => { pluginWindow = undefined })
      void pluginWindow.loadURL(`${SCHEME}://shell/plugin-manager.html`)
-@@ -334,36 +425,21 @@ async function main(): Promise<void> {
+@@ -334,36 +427,21 @@ async function main(): Promise<void> {
          enabled: development === undefined,
          click: openPluginWindow,
        },
@@ -569,7 +572,7 @@ index 8bc9fdc..8dcadcd 100644
    publishUpdate(updateState)
    setTimeout(() => { void checkAndPrompt(false) }, 10_000)
  
-@@ -373,14 +449,7 @@ async function main(): Promise<void> {
+@@ -373,18 +451,13 @@ async function main(): Promise<void> {
    app.on('window-all-closed', () => {
      if (process.platform !== 'darwin') app.quit()
    })
@@ -585,7 +588,13 @@ index 8bc9fdc..8dcadcd 100644
  }
  
  const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
-@@ -392,6 +461,47 @@ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unk
+ 
++if (ownsDesktopInstance) installUpdateExitHandler({ app, autoUpdater: nativeAutoUpdater, BrowserWindow })
++
+ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unknown) => {
+   const message = error instanceof Error ? error.message : String(error)
+   console.error(error)
+@@ -392,6 +465,47 @@ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unk
    if (diagnosticFile !== undefined) {
      await writeFile(diagnosticFile, `${error instanceof Error ? error.stack ?? message : message}\n`).catch(() => undefined)
    }
@@ -1210,10 +1219,10 @@ index e4b4759..eb9dce4 100644
            throw new Error(`desktop seed: pnpm store path is assigned to the wrong archive shard: ${entry.path}`)
          }
 diff --git a/apps/desktop/src/update-coordinator.ts b/apps/desktop/src/update-coordinator.ts
-index c31dcc3..9376439 100644
+index c31dcc3..706bf03 100644
 --- a/apps/desktop/src/update-coordinator.ts
 +++ b/apps/desktop/src/update-coordinator.ts
-@@ -1,23 +1,31 @@
+@@ -1,24 +1,34 @@
  /** One Electron release stream for the version-bound shell and dsh seed. */
 -
 -import { existsSync } from 'node:fs'
@@ -1224,6 +1233,7 @@ index c31dcc3..9376439 100644
  import electronUpdater, { type AppUpdater } from 'electron-updater'
  import type { DesktopUpdateState } from './ipc.ts'
 +import { configurePinnedUpdater } from './agentrouter-update-signature.mjs'
++import { configureUpdateRecovery, updateFailureMessage } from './agentrouter-update-recovery.mjs'
  const { autoUpdater } = electronUpdater
  
 -/** Checks, downloads, and installs one complete Desktop release. */
@@ -1245,6 +1255,7 @@ index c31dcc3..9376439 100644
 +  private downloadOperation: Promise<DesktopUpdateState> | undefined
    private installOperation: Promise<DesktopUpdateState> | undefined
 +  private readonly signatureCheck: ReturnType<typeof configurePinnedUpdater> | undefined
++  private readonly recovery: ReturnType<typeof configureUpdateRecovery>
  
 -  /**
 -   * @param publish - state sink for every desktop window.
@@ -1254,13 +1265,16 @@ index c31dcc3..9376439 100644
 -   */
    constructor(
      private readonly publish: (state: DesktopUpdateState) => DesktopUpdateState,
-@@ -30,29 +38,94 @@ export class DesktopUpdateCoordinator {
+     private readonly beforeRestart: () => Promise<void> = async () => {},
+@@ -29,67 +39,159 @@ export class DesktopUpdateCoordinator {
+   ) {
      this.updater.autoDownload = false
      this.updater.autoInstallOnAppQuit = false
++    this.recovery = configureUpdateRecovery(this.updater)
 +    if (app.isPackaged && existsSync(join(process.resourcesPath, 'app-update.yml'))) {
 +      const feed = loadYaml(readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8')) as { provider?: string; url?: string }
 +      // Generic GitHub feeds do not expose the previous release under /latest/.
-+      // Cached blockmaps remain preferred; a missing cache can use the immutable tag.
++      // Recover the matching baseline map from its immutable tag after cancellation.
 +      if (feed.provider === 'generic' && typeof feed.url === 'string') {
 +        const url = new URL(feed.url)
 +        if (url.origin === 'https://github.com' && /\/releases\/latest\/download\/?$/u.test(url.pathname)) {
@@ -1355,23 +1369,41 @@ index c31dcc3..9376439 100644
 +        this.detail.phase = 'idle'
          return this.publish({ phase: 'idle' })
        }
-@@ -60,35 +133,47 @@ export class DesktopUpdateCoordinator {
+       const result = await this.updater.checkForUpdates()
        const version = result?.isUpdateAvailable === true ? result.updateInfo.version : undefined
        this.availableVersion = version
 -      return version === undefined
 -        ? this.publish({ phase: 'idle' })
 -        : this.publish({ phase: 'available', version })
--    } catch (error) {
--      this.availableVersion = undefined
--      return this.publish({
--        phase: 'error',
--        message: error instanceof Error ? error.message : String(error),
--      })
 +      this.detail = { phase: version ? 'available' : 'current', checkedAt: new Date().toISOString(), releaseInfo: result?.updateInfo }
 +      return this.publish(version ? { phase: 'available', version } : { phase: 'idle' })
 +    } catch {
 +      this.detail = { ...this.detail, phase: 'error', error: '暂时无法检查更新，请检查网络后重试。' }
 +      return this.publish({ phase: 'error', message: this.detail.error })
++    }
++  }
++
++  private async doDownload(): Promise<DesktopUpdateState> {
++    const version = this.availableVersion!
++    this.detail = { ...this.detail, phase: 'downloading', error: undefined, progress: undefined }
++    this.publish({ phase: 'installing', version })
++    try {
++      await this.signatureCheck?.beforeDownload()
++      await this.recovery.beforeDownload()
++      const files = await this.updater.downloadUpdate()
++      await this.signatureCheck?.afterDownload(files)
++      this.downloaded = files
++      this.detail = { ...this.detail, phase: 'ready', progress: undefined }
++      return this.publish({ phase: 'ready', version })
+     } catch (error) {
+-      this.availableVersion = undefined
+-      return this.publish({
+-        phase: 'error',
+-        message: error instanceof Error ? error.message : String(error),
+-      })
++      this.downloaded = undefined
++      this.detail = { ...this.detail, phase: 'error', progress: undefined, error: await this.downloadFailure(error) }
++      return this.publish({ phase: 'error', version, message: this.detail.error })
      }
    }
  
@@ -1379,38 +1411,21 @@ index c31dcc3..9376439 100644
 -    const version = this.availableVersion
 -    if (version === undefined) {
 -      throw new Error('desktop update: no verified update is available')
--    }
-+  private async doDownload(): Promise<DesktopUpdateState> {
-+    const version = this.availableVersion!
-+    this.detail = { ...this.detail, phase: 'downloading', error: undefined, progress: undefined }
-     this.publish({ phase: 'installing', version })
-     try {
--      await this.updater.downloadUpdate()
--      this.availableVersion = undefined
--      const ready = this.publish({ phase: 'ready', version })
-+      await this.signatureCheck?.beforeDownload()
-+      const files = await this.updater.downloadUpdate()
-+      await this.signatureCheck?.afterDownload(files)
-+      this.downloaded = files
-+      this.detail = { ...this.detail, phase: 'ready', progress: undefined }
-+      return this.publish({ phase: 'ready', version })
-+    } catch {
-+      this.downloaded = undefined
-+      this.detail = { ...this.detail, phase: 'error', progress: undefined, error: '更新下载或校验失败，请重新下载。' }
-+      return this.publish({ phase: 'error', version, message: this.detail.error })
-+    }
-+  }
-+
 +  private async doRestart(): Promise<DesktopUpdateState> {
 +    const version = this.availableVersion!
 +    this.detail = { ...this.detail, phase: 'restarting', error: undefined }
 +    try { await this.signatureCheck?.afterDownload(this.downloaded!) }
-+    catch {
-+      this.downloaded = undefined
-+      this.detail = { ...this.detail, phase: 'error', error: '更新文件校验失败，请重新下载。' }
++    catch (error) {
++      const invalid = this.invalidFile(error)
++      if (invalid) this.downloaded = undefined
++      this.detail = { ...this.detail, phase: invalid ? 'error' : 'ready', error: await this.downloadFailure(error) }
 +      return this.publish({ phase: 'error', version, message: this.detail.error })
-+    }
-+    try {
+     }
+-    this.publish({ phase: 'installing', version })
+     try {
+-      await this.updater.downloadUpdate()
+-      this.availableVersion = undefined
+-      const ready = this.publish({ phase: 'ready', version })
        await this.beforeRestart()
 -      this.updater.quitAndInstall(false, true)
 -      return ready
@@ -1426,8 +1441,21 @@ index c31dcc3..9376439 100644
 +    } catch {
 +      this.detail = { ...this.detail, phase: 'ready', error: '任务仍在运行，或暂时无法重启。请稍后再试。' }
 +      return this.publish({ phase: 'error', version, message: this.detail.error })
++    }
++  }
++
++  private invalidFile(error: unknown): boolean {
++    return ['UPDATE_FILE_INVALID', 'ERR_UPDATER_INVALID_SIGNATURE'].includes((error as { code?: string })?.code ?? '')
++  }
++
++  private async downloadFailure(error: unknown): Promise<string> {
++    if (this.invalidFile(error)) {
++      try { await this.recovery.discardInvalidDownload() }
++      catch { return updateFailureMessage({ code: 'UPDATE_CACHE_UNAVAILABLE' }) }
      }
++    return updateFailureMessage(error)
    }
+ }
 diff --git a/apps/desktop/tests/host-process.spec.ts b/apps/desktop/tests/host-process.spec.ts
 index d3a08d7..fdc9cc1 100644
 --- a/apps/desktop/tests/host-process.spec.ts
@@ -1855,10 +1883,10 @@ index e0e7d14..479c55a 100644
 +  })
 +})
 diff --git a/apps/desktop/tests/update-coordinator.spec.ts b/apps/desktop/tests/update-coordinator.spec.ts
-index 272ef03..bd0450f 100644
+index 272ef03..8750146 100644
 --- a/apps/desktop/tests/update-coordinator.spec.ts
 +++ b/apps/desktop/tests/update-coordinator.spec.ts
-@@ -43,4 +43,75 @@ describe('desktop release metadata', () => {
+@@ -43,4 +43,91 @@ describe('desktop release metadata', () => {
  
  describe('desktop update coordinator', () => {
 +  it('downloads separately, reports actual progress and waits for an explicit restart', async () => {
@@ -1905,7 +1933,7 @@ index 272ef03..bd0450f 100644
 +      downloadUpdate: vi.fn(async () => ['installer.exe']), quitAndInstall: vi.fn() } as unknown as AppUpdater
 +    const beforeRestart = vi.fn(async () => {})
 +    const coordinator = new DesktopUpdateCoordinator(state => state, beforeRestart, updater, () => true)
-+    const afterDownload = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('changed cache'))
++    const afterDownload = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(Object.assign(new Error('changed cache'), { code: 'UPDATE_FILE_INVALID' }))
 +    Object.defineProperty(coordinator, 'signatureCheck', { value: { beforeDownload: vi.fn(), afterDownload } })
 +    await coordinator.check(); await coordinator.download('1.0.1'); await coordinator.restart('1.0.1')
 +    expect(afterDownload).toHaveBeenCalledTimes(2)
@@ -1932,9 +1960,25 @@ index 272ef03..bd0450f 100644
 +    expect(updater.downloadUpdate).toHaveBeenCalledOnce()
 +  })
 +
++  it('retains the install action after a temporary file lock and retries without another download', async () => {
++    const updater = { checkForUpdates: vi.fn(async () => ({ isUpdateAvailable: true, updateInfo: { version: '1.0.1' } })),
++      downloadUpdate: vi.fn(async () => ['installer.exe']), quitAndInstall: vi.fn() } as unknown as AppUpdater
++    const coordinator = new DesktopUpdateCoordinator(state => state, async () => {}, updater, () => true)
++    const afterDownload = vi.fn().mockResolvedValueOnce(undefined)
++      .mockRejectedValueOnce(Object.assign(new Error('private file path'), { code: 'UPDATE_CACHE_UNAVAILABLE' })).mockResolvedValueOnce(undefined)
++    Object.defineProperty(coordinator, 'signatureCheck', { value: { beforeDownload: vi.fn(), afterDownload } })
++    await coordinator.check(); await coordinator.download('1.0.1')
++    expect((await coordinator.restart('1.0.1')).phase).toBe('error')
++    expect(coordinator.status().canInstall).toBe(true)
++    expect(coordinator.status().error).toContain('占用')
++    await coordinator.restart('1.0.1')
++    expect(updater.downloadUpdate).toHaveBeenCalledOnce()
++    expect(updater.quitAndInstall).toHaveBeenCalledOnce()
++  })
++
    it('installs one Electron release and restarts after download', async () => {
      const states: DesktopUpdateState[] = []
-@@ -72,5 +143,5 @@ describe('desktop update coordinator', () => {
+@@ -72,5 +159,5 @@ describe('desktop update coordinator', () => {
      expect(downloadUpdate).toHaveBeenCalledOnce()
      expect(beforeRestart).toHaveBeenCalledOnce()
 -    expect(quitAndInstall).toHaveBeenCalledWith(false, true)

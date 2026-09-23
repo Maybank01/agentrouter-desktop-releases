@@ -27,6 +27,8 @@ export function prepareSource() {
   // One shared verifier is bundled into the native main process and also used
   // by independent release acceptance. It is part of the exported adapter.
   copyFileSync(join(directory, 'update-signature.mjs'), join(source, 'apps/desktop/src/agentrouter-update-signature.mjs'))
+  copyFileSync(join(directory, 'update-recovery.mjs'), join(source, 'apps/desktop/src/agentrouter-update-recovery.mjs'))
+  copyFileSync(join(directory, 'update-exit.mjs'), join(source, 'apps/desktop/src/agentrouter-update-exit.mjs'))
   copyFileSync(join(directory, 'update-routes.mjs'), join(source, 'apps/desktop/src/agentrouter-update-routes.mjs'))
   copyFileSync(join(directory, 'credential-recovery.mjs'), join(source, 'apps/desktop/src/agentrouter-credential-recovery.mjs'))
   copyFileSync(join(directory, 'external-navigation.mjs'), join(source, 'apps/desktop/src/agentrouter-external-navigation.mjs'))

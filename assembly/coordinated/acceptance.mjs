@@ -1,9 +1,10 @@
 /** Real Electron and offline profile installation; synthetic account only. */
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { extractFile } from '@electron/asar'
@@ -78,6 +79,7 @@ const origin = `http://127.0.0.1:${gateway.address().port}`
 let app, page
 const launches = []
 let nativeUpdateMetrics
+let unrelatedProcess
 let externalBrowserNavigation = false
 const launch = async receipt => {
   const started = Date.now()
@@ -353,11 +355,43 @@ try {
       assert.equal((await api('updates/status')).canInstall, true)
       assert.equal(await app.evaluate(({ app }) => app.getVersion()), baseline.input.productVersion,
         'Download alone does not restart or activate the installer')
+      const pending = join(process.env.LOCALAPPDATA, '@agentrouterdesktop-updater/pending')
+      const pendingInfo = json(join(pending, 'update-info.json'))
+      assert.equal(pendingInfo.fileName, `AgentRouter-${candidate.input.productVersion}-x64-Setup.exe`)
+      const cachedInstaller = join(pending, pendingInfo.fileName)
+      const cachedDigest = createHash('sha512').update(readFileSync(cachedInstaller)).digest('base64')
+      assert.equal(cachedDigest, pendingInfo.sha512)
+      await app.close(); app = undefined
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        join(directory, 'update-cancel-acceptance.ps1'), '-Installer', cachedInstaller, '-InstallDirectory', dirname(candidate.executable)],
+      { env, windowsHide: true, stdio: 'inherit', timeout: 75000 })
+      assert.equal(JSON.parse(extractFile(join(dirname(candidate.executable), 'resources/app.asar'), 'package.json').toString()).version,
+        baseline.input.productVersion, 'Cancel must preserve the installed version')
+      assert.equal(createHash('sha512').update(readFileSync(cachedInstaller)).digest('base64'), cachedDigest,
+        'Cancel must preserve the verified download')
+      await launch(baseline)
+      await api('updates/check', {})
+      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 60000 }).toBe('available')
+      await api('updates/download', { version: candidate.input.productVersion })
+      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 60000 }).toBe('ready')
+      const sibling = dirname(candidate.executable) + '-unrelated'
+      mkdirSync(sibling)
+      const siblingExecutable = join(sibling, 'AgentRouter.exe')
+      copyFileSync(process.execPath, siblingExecutable)
+      unrelatedProcess = spawn(siblingExecutable, ['-e', 'process.stdout.write("ready\\n");setInterval(()=>{},1000)'],
+        { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env })
+      await once(unrelatedProcess.stdout, 'data')
+      // Reproduce both startup-recovery and renderer-unload quit vetoes on the
+      // actual installed shell. Only the verified updater handoff may bypass them.
+      await app.evaluate(({ BrowserWindow }) => {
+        for (const window of BrowserWindow.getAllWindows()) window.setClosable(false)
+      })
+      await page.evaluate(() => { window.onbeforeunload = () => false })
       await prepareStaleRegistryMetadata()
       const modulesPath = join(profile, 'node_modules/.modules.yaml')
       const modulesBefore = { bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }
       const restartStarted = Date.now()
-      const closing = app.waitForEvent('close', { timeout: 300000 })
+      const closing = app.waitForEvent('close', { timeout: 45000 })
       await api('updates/install', { version: candidate.input.productVersion, interrupt: false })
       await closing
       app = undefined
@@ -382,7 +416,10 @@ try {
       assert.ok(startup.visibleMs < 10000, 'Update restart must show its startup window within ten seconds')
       assert.ok(startup.durationMs < 30000, 'An unchanged runtime must become ready within thirty seconds')
       assert.deepEqual({ bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }, modulesBefore)
-      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true }
+      assert.equal(unrelatedProcess.exitCode, null, 'Installer must leave the same-name sibling process running')
+      unrelatedProcess.kill(); unrelatedProcess = undefined
+      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true,
+        cancelledInstallerRetried: true, verifiedDownloadRetained: true, quitVetoHandled: true, unrelatedProcessPreserved: true }
       console.log(JSON.stringify({ nativeUpdateMetrics }))
       const processEnv = { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }
       await expect.poll(() => Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
@@ -483,4 +520,8 @@ try {
   if (existsSync(join(state, 'startup-error.log'))) console.error(readFileSync(join(state, 'startup-error.log'), 'utf8'))
   console.error(`Acceptance state: ${state}`)
   throw error
-} finally { await close(); await new Promise(resolve => gateway.close(resolve)) }
+} finally {
+  unrelatedProcess?.kill()
+  await close()
+  await new Promise(resolve => gateway.close(resolve))
+}
