@@ -767,7 +767,7 @@ index 8bc9fdc..6dc9bc5 100644
    app.exit(1)
  })
 diff --git a/apps/desktop/src/project-manager.ts b/apps/desktop/src/project-manager.ts
-index b9b94f7..0e89077 100644
+index b9b94f7..3048a93 100644
 --- a/apps/desktop/src/project-manager.ts
 +++ b/apps/desktop/src/project-manager.ts
 @@ -15,14 +15,16 @@ import {
@@ -858,12 +858,49 @@ index b9b94f7..0e89077 100644
  
  function releaseFile(projectDir: string): DesktopRelease {
    return parseDesktopRelease(readJson(join(projectDir, 'desktop-release.json')))
-@@ -178,17 +195,17 @@ export function packageNameFromSpec(spec: string): string | undefined {
+@@ -178,17 +195,54 @@ export function packageNameFromSpec(spec: string): string | undefined {
    if (versionAt !== -1) assertVersion(spec.slice(versionAt + 1))
    return name
  }
  
 -function removeOwnedDirectory(path: string): void {
++/** Windows codes returned while antivirus, indexing or search briefly holds a new directory. */
++const TRANSIENT_RENAME_CODES: ReadonlySet<string> = new Set(['EPERM', 'EBUSY', 'EACCES'])
++/** Backoff before each retry; the total wait stays near three seconds. */
++const TRANSIENT_RENAME_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800, 1200]
++
++/** Injectable collaborators for {@link renameWithTransientRetry} tests. */
++export interface TransientRenameOptions {
++  readonly platform?: NodeJS.Platform
++  readonly rename?: (from: string, to: string) => void
++  readonly sleep?: (milliseconds: number) => Promise<void>
++  readonly delays?: readonly number[]
++}
++
++/**
++ * Rename one directory, retrying only Windows sharing errors with bounded backoff.
++ * A freshly written profile can be briefly held open by another process, which
++ * makes a single rename fail although the next attempt succeeds. Other platforms
++ * and error codes fail immediately; the last error is rethrown after the budget.
++ */
++export async function renameWithTransientRetry(from: string, to: string, options: TransientRenameOptions = {}): Promise<void> {
++  const rename = options.rename ?? renameSync
++  const retry = (options.platform ?? process.platform) === 'win32'
++  const delays = options.delays ?? TRANSIENT_RENAME_DELAYS_MS
++  const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((settle) => { setTimeout(settle, milliseconds) }))
++  for (let attempt = 0; ; attempt += 1) {
++    try {
++      rename(from, to)
++      return
++    } catch (error) {
++      const code = (error as NodeJS.ErrnoException | undefined)?.code
++      const delay = delays[attempt]
++      if (!retry || delay === undefined || typeof code !== 'string' || !TRANSIENT_RENAME_CODES.has(code)) throw error
++      await sleep(delay)
++    }
++  }
++}
++
 +async function removeOwnedDirectory(path: string): Promise<void> {
    if (!existsSync(path)) return
    const stat = lstatSync(path)
@@ -878,7 +915,7 @@ index b9b94f7..0e89077 100644
  
  function copyMetadata(source: string, target: string): void {
    mkdirSync(target, { recursive: true, mode: 0o700 })
-@@ -264,9 +281,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
+@@ -264,9 +318,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
    const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
    const expectedOverrides = desktopCorePackageOverrides(packageSet)
    if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
@@ -889,7 +926,7 @@ index b9b94f7..0e89077 100644
    }
    return manifest
  }
-@@ -284,9 +301,87 @@ function profilePluginNames(projectDir: string): readonly string[] {
+@@ -284,9 +338,87 @@ function profilePluginNames(projectDir: string): readonly string[] {
    return plugins
  }
  
@@ -978,7 +1015,7 @@ index b9b94f7..0e89077 100644
  
  function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
    const manifest = projectManifest(projectDir)
-@@ -338,9 +433,9 @@ export class DesktopProjectManager {
+@@ -338,9 +470,9 @@ export class DesktopProjectManager {
      readonly runtime: DesktopRuntimeExecutables,
    ) {}
  
@@ -989,10 +1026,13 @@ index b9b94f7..0e89077 100644
      const value = readJson(this.paths.pending)
      if (!isRecord(value) || value.schemaVersion !== 1
        || typeof value.id !== 'string' || typeof value.stagingProfile !== 'string'
-@@ -357,9 +452,9 @@ export class DesktopProjectManager {
+@@ -355,11 +487,11 @@ export class DesktopProjectManager {
+       step: value.step,
+     }
      if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
        mkdirSync(dirname(this.paths.profile), { recursive: true })
-       renameSync(this.paths.rollback, this.paths.profile)
+-      renameSync(this.paths.rollback, this.paths.profile)
++      await renameWithTransientRetry(this.paths.rollback, this.paths.profile)
      }
 -    removeOwnedDirectory(pending.stagingProfile)
 +    await removeOwnedDirectory(pending.stagingProfile)
@@ -1000,7 +1040,7 @@ index b9b94f7..0e89077 100644
    }
  
    /** Read the active desktop plugin inventory. */
-@@ -386,71 +481,162 @@ export class DesktopProjectManager {
+@@ -386,71 +518,162 @@ export class DesktopProjectManager {
  
    /** Read the release version applied to the active desktop project. */
    releaseVersion(): string {
@@ -1181,7 +1221,7 @@ index b9b94f7..0e89077 100644
        }
      })
    }
-@@ -460,14 +646,52 @@ export class DesktopProjectManager {
+@@ -460,14 +683,52 @@ export class DesktopProjectManager {
      mkdirSync(path, { recursive: true, mode: 0o700 })
      return path
    }
@@ -1235,7 +1275,7 @@ index b9b94f7..0e89077 100644
          const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
          writeProfilePlugins(
            projectDir,
-@@ -480,9 +704,9 @@ export class DesktopProjectManager {
+@@ -480,9 +741,9 @@ export class DesktopProjectManager {
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
@@ -1246,7 +1286,7 @@ index b9b94f7..0e89077 100644
          return
        }
        case 'plugin-update':
-@@ -490,9 +714,9 @@ export class DesktopProjectManager {
+@@ -490,9 +751,9 @@ export class DesktopProjectManager {
          assertVersion(mutation.version)
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
@@ -1257,7 +1297,7 @@ index b9b94f7..0e89077 100644
            const installed = inspectPlugin(projectDir, mutation.name)
            writeProfilePlugins(
              projectDir,
-@@ -504,16 +728,24 @@ export class DesktopProjectManager {
+@@ -504,16 +765,24 @@ export class DesktopProjectManager {
          mutation satisfies never
      }
    }
@@ -1286,7 +1326,7 @@ index b9b94f7..0e89077 100644
    }
  
    private async activate(stagingProfile: string, hooks: DesktopProjectHooks): Promise<void> {
-@@ -525,10 +757,11 @@ export class DesktopProjectManager {
+@@ -525,31 +794,33 @@ export class DesktopProjectManager {
      }
      writeJson(this.paths.pending, pending)
      await hooks.beforeActivate()
@@ -1298,19 +1338,22 @@ index b9b94f7..0e89077 100644
        mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
        writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
        if (existsSync(this.paths.profile)) {
-         renameSync(this.paths.profile, this.paths.rollback)
-@@ -536,20 +769,21 @@ export class DesktopProjectManager {
+-        renameSync(this.paths.profile, this.paths.rollback)
++        await renameWithTransientRetry(this.paths.profile, this.paths.rollback)
+         activeMoved = true
        }
        mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
        writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
-       renameSync(stagingProfile, this.paths.profile)
+-      renameSync(stagingProfile, this.paths.profile)
++      await renameWithTransientRetry(stagingProfile, this.paths.profile)
 +      stagingActivated = true
        await hooks.afterActivate()
        unlinkSync(this.paths.pending)
      } catch (error) {
 -      if (existsSync(this.paths.profile)) removeOwnedDirectory(this.paths.profile)
+-      if (activeMoved && existsSync(this.paths.rollback)) renameSync(this.paths.rollback, this.paths.profile)
 +      if (stagingActivated && existsSync(this.paths.profile)) await removeOwnedDirectory(this.paths.profile)
-       if (activeMoved && existsSync(this.paths.rollback)) renameSync(this.paths.rollback, this.paths.profile)
++      if (activeMoved && existsSync(this.paths.rollback)) await renameWithTransientRetry(this.paths.rollback, this.paths.profile)
        if (existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
        await hooks.afterActivate().catch(() => undefined)
        throw error
@@ -1323,7 +1366,7 @@ index b9b94f7..0e89077 100644
      if (command === undefined) throw new Error('desktop project: pnpm command is required')
      for (const path of [this.paths.root, this.paths.pnpm.store, this.paths.pnpm.cache,
        this.paths.pnpm.state, this.paths.pnpm.config, this.paths.pnpm.home]) {
-@@ -559,9 +793,9 @@ export class DesktopProjectManager {
+@@ -559,9 +830,9 @@ export class DesktopProjectManager {
      if (!existsSync(npmrc)) writeFileSync(npmrc, '', { mode: 0o600 })
      const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
        !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
@@ -1334,7 +1377,7 @@ index b9b94f7..0e89077 100644
          this.runtime.pnpm,
          `--config.registry=${DESKTOP_REGISTRY}`,
          `--config.store-dir=${this.paths.pnpm.store}`,
-@@ -570,10 +804,14 @@ export class DesktopProjectManager {
+@@ -570,10 +841,14 @@ export class DesktopProjectManager {
          command,
          ...commandArgs,
        ], {
@@ -1349,7 +1392,7 @@ index b9b94f7..0e89077 100644
            NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
            NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
            NPM_CONFIG_USERCONFIG: npmrc,
-@@ -598,14 +836,16 @@ export class DesktopProjectManager {
+@@ -598,14 +873,16 @@ export class DesktopProjectManager {
          reject(errorOf(error, 'desktop project: failed to assign the package transaction lock to pnpm'))
          return
        }
@@ -1366,7 +1409,7 @@ index b9b94f7..0e89077 100644
        child.stderr.on('data', appendDiagnostics)
        const complete = (settleChild: () => void): void => {
          if (completed) return
-@@ -621,14 +861,12 @@ export class DesktopProjectManager {
+@@ -621,14 +898,12 @@ export class DesktopProjectManager {
        child.once('error', (error) => { complete(() => { reject(error) }) })
        child.once('close', (code, signal) => {
          complete(() => {
@@ -1383,7 +1426,7 @@ index b9b94f7..0e89077 100644
        })
      })
    }
-@@ -689,15 +927,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
+@@ -689,15 +964,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
    const manifest: DesktopProjectManifest = {
      name: PROJECT_NAME,
      private: true,
@@ -1901,10 +1944,20 @@ index d3a08d7..fdc9cc1 100644
  const bodies = new Map()
  process.send({ type: 'ready', protocolVersion: 3, dshVersion: process.env.NODE_OPTIONS ?? 'clean' })
 diff --git a/apps/desktop/tests/project-manager.spec.ts b/apps/desktop/tests/project-manager.spec.ts
-index 27ac24f..62822df 100644
+index 27ac24f..7b60daf 100644
 --- a/apps/desktop/tests/project-manager.spec.ts
 +++ b/apps/desktop/tests/project-manager.spec.ts
-@@ -84,12 +84,14 @@ function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): v
+@@ -8,8 +8,9 @@ import { resolveDesktopPaths } from '../src/paths.ts'
+ import {
+   createSeedMetadata,
+   DesktopProjectManager,
+   packageNameFromSpec,
++  renameWithTransientRetry,
+   verifySeedIntegrity,
+   type DesktopProjectHooks,
+ } from '../src/project-manager.ts'
+ import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
+@@ -84,12 +85,14 @@ function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): v
  
  function writeFakePnpm(root: string): string {
    const path = join(root, 'pnpm.mjs')
@@ -1920,7 +1973,7 @@ index 27ac24f..62822df 100644
  const manifestPath = join(project, 'package.json')
  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
  const packageName = spec => spec.startsWith('@')
-@@ -125,9 +127,14 @@ for (const [name, version] of Object.entries(manifest.dependencies)) {
+@@ -125,9 +128,14 @@ for (const [name, version] of Object.entries(manifest.dependencies)) {
      writeFileSync(join(packageRoot, 'lib', 'index.js'), '')
    }
  }
@@ -1936,7 +1989,7 @@ index 27ac24f..62822df 100644
    return path
  }
  
-@@ -172,8 +179,187 @@ afterEach(async () => {
+@@ -172,8 +180,187 @@ afterEach(async () => {
    if (failures.length > 0) throw new AggregateError(failures, 'desktop worker cleanup failed')
  })
  
@@ -2124,7 +2177,7 @@ index 27ac24f..62822df 100644
      expect(packageNameFromSpec('@scope/plugin@1.2.3')).toBe('@scope/plugin')
      expect(packageNameFromSpec('plugin@next')).toBe('plugin')
      expect(() => packageNameFromSpec('file:../plugin')).toThrow(/unsupported npm package spec/u)
-@@ -192,8 +378,146 @@ describe('desktop package policy', () => {
+@@ -192,8 +379,146 @@ describe('desktop package policy', () => {
    })
  })
  
@@ -2271,7 +2324,7 @@ index 27ac24f..62822df 100644
      const root = temporaryRoot()
      const seed = join(root, 'seed')
      const log = join(root, 'pnpm-log.json')
-@@ -291,9 +615,9 @@ describe('desktop project transactions', () => {
+@@ -291,9 +616,9 @@ describe('desktop project transactions', () => {
        stagingProfile,
        step: 'prepared',
      })}\n`)
@@ -2282,7 +2335,7 @@ index 27ac24f..62822df 100644
      expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0' }])
      expect(existsSync(stagingProfile)).toBe(false)
      expect(existsSync(paths.pending)).toBe(false)
-@@ -361,12 +685,13 @@ describe('desktop project transactions', () => {
+@@ -361,12 +686,13 @@ describe('desktop project transactions', () => {
      expect(coreSpec).toMatch(/^file:\.\/desktop-packages\//u)
      expect(readFileSync(join(paths.profile, 'pnpm-workspace.yaml'), 'utf8'))
        .toContain(`${JSON.stringify('@deepseek-ai/dsh')}: ${JSON.stringify(coreSpec)}`)
@@ -2300,6 +2353,74 @@ index 27ac24f..62822df 100644
    })
  
    it('reconciles dsh to the packaged release without removing desktop plugins', async () => {
+@@ -407,4 +733,67 @@ describe('desktop project transactions', () => {
+     expect(readFileSync(join(paths.pnpm.store, 'release-2'), 'utf8')).toBe('two')
+     await expect(manager.applyRelease(nextSeed, '1.1.0', hooks())).resolves.toBe(false)
+   })
+ })
++
++describe('desktop profile activation rename', () => {
++  const sharingError = (code: string): NodeJS.ErrnoException => Object.assign(new Error(`${code}: rename`), { code })
++
++  it('retries a transiently locked directory on Windows and then renames it', async () => {
++    const root = temporaryRoot()
++    const from = join(root, 'staging-profile')
++    const to = join(root, 'profile')
++    mkdirSync(from)
++    writeFileSync(join(from, 'package.json'), '{}')
++    const waits: number[] = []
++    let failures = 2
++    await renameWithTransientRetry(from, to, {
++      platform: 'win32',
++      sleep: async (milliseconds) => { waits.push(milliseconds) },
++      rename: (source, target) => {
++        if (failures > 0) {
++          failures -= 1
++          throw sharingError('EPERM')
++        }
++        renameSync(source, target)
++      },
++    })
++    expect(waits).toEqual([50, 100])
++    expect(existsSync(from)).toBe(false)
++    expect(readFileSync(join(to, 'package.json'), 'utf8')).toBe('{}')
++  })
++
++  it('rethrows a persistent sharing error after the bounded backoff', async () => {
++    const waits: number[] = []
++    let attempts = 0
++    const persistent = sharingError('EPERM')
++    await expect(renameWithTransientRetry('from', 'to', {
++      platform: 'win32',
++      sleep: async (milliseconds) => { waits.push(milliseconds) },
++      rename: () => {
++        attempts += 1
++        throw persistent
++      },
++    })).rejects.toBe(persistent)
++    expect(attempts).toBe(waits.length + 1)
++    expect(waits[0]).toBe(50)
++    expect(waits.reduce((total, wait) => total + wait, 0)).toBeLessThanOrEqual(3000)
++  })
++
++  it('rethrows other errors and other platforms immediately', async () => {
++    for (const [platform, code] of [['win32', 'ENOENT'], ['win32', 'EXDEV'], ['linux', 'EPERM'], ['darwin', 'EBUSY']] as const) {
++      const waits: number[] = []
++      let attempts = 0
++      const failure = sharingError(code)
++      await expect(renameWithTransientRetry('from', 'to', {
++        platform,
++        sleep: async (milliseconds) => { waits.push(milliseconds) },
++        rename: () => {
++          attempts += 1
++          throw failure
++        },
++      })).rejects.toBe(failure)
++      expect(attempts).toBe(1)
++      expect(waits).toEqual([])
++    }
++  })
++})
 diff --git a/apps/desktop/tests/seed-store.spec.ts b/apps/desktop/tests/seed-store.spec.ts
 index e0e7d14..8ad9888 100644
 --- a/apps/desktop/tests/seed-store.spec.ts
