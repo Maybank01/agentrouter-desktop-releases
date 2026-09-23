@@ -362,8 +362,13 @@ try {
       const cachedDigest = createHash('sha512').update(readFileSync(cachedInstaller)).digest('base64')
       assert.equal(cachedDigest, pendingInfo.sha512)
       await app.close(); app = undefined
+      // Run the real NSIS Cancel flow against an identical disposable copy.
+      // The updater's original pending file must remain the exact byte source
+      // for the subsequent reopen/retry path.
+      const cancelInstaller = join(state, pendingInfo.fileName)
+      copyFileSync(cachedInstaller, cancelInstaller)
       execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-        join(directory, 'update-cancel-acceptance.ps1'), '-Installer', cachedInstaller, '-InstallDirectory', dirname(candidate.executable)],
+        join(directory, 'update-cancel-acceptance.ps1'), '-Installer', cancelInstaller, '-InstallDirectory', dirname(candidate.executable)],
       { env, windowsHide: true, stdio: 'inherit', timeout: 75000 })
       assert.equal(JSON.parse(extractFile(join(dirname(candidate.executable), 'resources/app.asar'), 'package.json').toString()).version,
         baseline.input.productVersion, 'Cancel must preserve the installed version')
