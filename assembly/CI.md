@@ -121,6 +121,20 @@ identity summary in every Windows job. Branch protection is not configured on
 main; if it is added, require the four Windows check names above plus
 `Source boundaries and provenance`.
 
+### Release reuse of these checks (phase 2)
+
+`release.yml` now reuses a successful ci.yml run as pre-sign acceptance when
+all five jobs above succeeded and the tested tree's installed-acceptance input
+digest equals the release commit's (PR runs additionally require the base to be
+an ancestor of the head). Keep these check names stable: they are matched by
+`assembly/coordinated-evidence.mjs`. Renaming one only makes releases fall back
+to the full candidate job. After signing, the signed native update, signed
+legacy migration and clean-worker signed installation run in parallel on the
+staged draft. The previous release-side `npm test` repetitions on the
+post-sign and publish workers were removed; boundaries still run in ci.yml, the
+evidence job, the candidate fallback and the sign job. See
+`COORDINATED-RELEASE.md` for the timeline and draft rules.
+
 ### Dependency install retries
 
 Every workflow `npm ci` step runs through `assembly/retry-install.mjs`, which

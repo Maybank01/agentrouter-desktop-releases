@@ -44,9 +44,15 @@ encrypted PFX secrets and removes its temporary CurrentUser/My key afterward.
 The exported adapter pins the public update key and verifies a signed full-file
 manifest through electron-updater's supported hook. Preserve that verification,
 do not install trusted roots, and label the release self-signed rather than
-publicly trusted. Native signed upgrade and separate installation of the same
-final bytes are mandatory before publishing. Unsigned or signed loopback test
-installers are never promoted or uploaded as release assets.
+publicly trusted. Native signed upgrade, signed legacy migration and separate
+clean installation of the same final bytes are mandatory before publishing.
+Unsigned or signed loopback test installers are never promoted or uploaded as
+release assets. Release acceptance may reuse a successful same-repository
+ci.yml run only when its installed-acceptance input digest equals the release
+commit's (`assembly/coordinated-evidence.mjs`); otherwise it repeats candidate
+acceptance. A changed package or installer of a published version requires a
+new version; a never-published draft of the same version may be re-signed
+(owner decision 2026-09-23). Latest never moves backwards.
 Do not promote test installers or redirect third-party clients to this feed.
 
 Product plugin validation may run independently on public hosted Windows workers
