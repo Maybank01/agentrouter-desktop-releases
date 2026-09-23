@@ -197,6 +197,37 @@ index a50de3a..6aaad3d 100644
        return item
      }))
      empty.hidden = plugins.length !== 0
+diff --git a/apps/desktop/renderer/startup.html b/apps/desktop/renderer/startup.html
+new file mode 100644
+index 0000000..0386fe5
+--- /dev/null
++++ b/apps/desktop/renderer/startup.html
+@@ -0,0 +1,25 @@
++<!doctype html>
++<html lang="zh-CN">
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'">
++<title>AgentRouter</title>
++<style>
++  :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
++  body { margin: 0; height: 100vh; display: grid; place-items: center; background: light-dark(#fafaf9, #191919); color: light-dark(#272727, #eee); }
++  main { text-align: center; }
++  img { width: 56px; height: 56px; }
++  h1 { font-size: 22px; font-weight: 600; margin: 18px 0 28px; }
++  p { opacity: .75; min-width: 280px; }
++  .track { width: 220px; height: 3px; overflow: hidden; border-radius: 2px; margin: 22px auto; background: light-dark(#e4e4e4, #383838); }
++  .bar { width: 45%; height: 100%; background: #3b9e88; animation: slide 1.6s ease-in-out infinite alternate; }
++  @keyframes slide { from { transform: translateX(-80%); } to { transform: translateX(210%); } }
++  @media (prefers-reduced-motion: reduce) { .bar { animation: none; margin: auto; } }
++</style>
++<main>
++  <img src="agentrouter-icon.png" alt="">
++  <h1>AgentRouter</h1>
++  <p id="status" role="status" aria-live="polite">正在启动 AgentRouter…</p>
++  <div class="track" aria-hidden="true"><div class="bar"></div></div>
++</main>
++</html>
 diff --git a/apps/desktop/scripts/prepare-seed.ts b/apps/desktop/scripts/prepare-seed.ts
 index 73da078..beef483 100644
 --- a/apps/desktop/scripts/prepare-seed.ts

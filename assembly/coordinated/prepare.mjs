@@ -24,6 +24,10 @@ export function prepareSource() {
   const patch = join(directory, lock.patch)
   git(source, 'apply', '--check', patch)
   git(source, 'apply', patch)
+  // Regenerated patches must retain added shell assets. Git diff omits an
+  // untracked startup.html, otherwise producing a valid but unbootable app.
+  assert.match(readFileSync(join(source, 'apps/desktop/renderer/startup.html'), 'utf8'),
+    /id="status"/, 'The patched startup page must include its progress element')
   // One shared verifier is bundled into the native main process and also used
   // by independent release acceptance. It is part of the exported adapter.
   copyFileSync(join(directory, 'update-signature.mjs'), join(source, 'apps/desktop/src/agentrouter-update-signature.mjs'))

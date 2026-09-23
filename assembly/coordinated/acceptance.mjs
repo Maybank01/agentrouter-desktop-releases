@@ -122,6 +122,10 @@ const launch = async receipt => {
     }
     assert.ok(found, 'The preceding public Desktop must boot its real Web carrier.')
   } else {
+    if (page.url() === 'dsh-app://shell/startup.html') {
+      await expect.poll(async () => page.url() === 'dsh-app://app/index.html'
+        || await page.locator('#status').isVisible(), { timeout: 10000 }).toBe(true)
+    }
     await page.waitForURL('dsh-app://app/index.html', { timeout: 180000 })
     if (receipt.input.productVersion === candidate?.input.productVersion) {
       await expect.poll(() => json(join(home, 'desktop/startup.json')).ready, { timeout: 10000 }).toBe(true)
@@ -546,6 +550,8 @@ try {
 } catch (error) {
   console.error(error)
   if (existsSync(join(state, 'startup-error.log'))) console.error(readFileSync(join(state, 'startup-error.log'), 'utf8'))
+  if (existsSync(join(home, 'desktop/startup.json'))) console.error(readFileSync(join(home, 'desktop/startup.json'), 'utf8'))
+  if (page && !page.isClosed()) console.error(JSON.stringify({ failedPage: page.url() }))
   if (nativeUpdate && process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
     if (existsSync(join(state, 'electron.log'))) console.error(readFileSync(join(state, 'electron.log'), 'utf8').slice(-16000))
     try {
