@@ -14,6 +14,7 @@ import { assertExternalWebNavigation } from './external-navigation-acceptance.mj
 import { assertCredentialRecovery } from './credential-recovery-acceptance.mjs'
 import { assertRuntimeRecovery } from './runtime-recovery-acceptance.mjs'
 import { readInstalledProductVersion } from './installed-version.mjs'
+import { observeInstalledProcessExit } from './installed-process.mjs'
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const legacyExecutable = process.argv.find(value => value.startsWith('--legacy-executable='))?.slice('--legacy-executable='.length)
@@ -419,10 +420,15 @@ try {
       await prepareStaleRegistryMetadata()
       const modulesPath = join(profile, 'node_modules/.modules.yaml')
       const modulesBefore = { bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }
+      const originalPid = await app.evaluate(() => process.pid)
+      const observer = await observeInstalledProcessExit(originalPid, baseline.executable)
       const restartStarted = Date.now()
-      const closing = app.waitForEvent('close', { timeout: 45000 })
-      await api('updates/install', { version: candidate.input.productVersion, interrupt: false })
-      await closing
+      let processExit
+      try {
+        await api('updates/install', { version: candidate.input.productVersion, interrupt: false })
+        processExit = await observer.exited
+      } finally { observer.cancel() }
+      console.log(JSON.stringify({ phase: 'original-process-exited', ...processExit }))
       app = undefined
       await expect.poll(() => {
         try {
@@ -447,7 +453,7 @@ try {
       assert.deepEqual({ bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }, modulesBefore)
       assert.equal(unrelatedProcess.exitCode, null, 'Installer must leave the same-name sibling process running')
       unrelatedProcess.kill(); unrelatedProcess = undefined
-      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true,
+      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true, processExit,
         cancelledInstallerRetried: true, verifiedDownloadRetained: true, quitVetoHandled: true, unrelatedProcessPreserved: true }
       console.log(JSON.stringify({ nativeUpdateMetrics }))
       const processEnv = { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }
