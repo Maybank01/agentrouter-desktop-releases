@@ -15,7 +15,7 @@ test('only a frozen npm ci with plain arguments may be repeated', () => {
 test('a failed install is retried once and a success is not repeated', () => {
   const results = [{ status: 3221226505 }, { status: 0 }]
   const commands = []
-  const outcome = runInstall('npm ci', { log: quiet, spawn: command => { commands.push(command); return results.shift() } })
+  const outcome = runInstall('npm ci', { log: quiet, npmLog: () => undefined, spawn: command => { commands.push(command); return results.shift() } })
   assert.deepEqual(commands, ['npm ci', 'npm ci'])
   assert.equal(outcome.attempts, 2)
   assert.match(outcome.reasons[0], /0xC0000409/)
@@ -26,7 +26,7 @@ test('a failed install is retried once and a success is not repeated', () => {
 
 test('two failures fail the step with both reasons', () => {
   const results = [{ status: 1 }, { status: null, signal: 'SIGTERM' }]
-  assert.throws(() => runInstall('npm ci', { log: quiet, spawn: () => results.shift() }),
+  assert.throws(() => runInstall('npm ci', { log: quiet, npmLog: () => ({ path: 'x.log', tail: 'verbose' }), spawn: () => results.shift() }),
     /npm ci failed after 2 attempts: exit 1; terminated by SIGTERM/)
   assert.match(describeExit({ error: Object.assign(new Error('x'), { code: 'ETIMEDOUT' }) }), /ETIMEDOUT/)
 })

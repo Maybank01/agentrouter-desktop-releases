@@ -1,6 +1,8 @@
 /** Run `npm ci` once more if it fails, and name the exit reason; used by every workflow npm ci step. */
 import { spawnSync } from 'node:child_process'
-import { resolve } from 'node:path'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const windowsStatus = {
@@ -25,12 +27,26 @@ export function parseInstall(argv) {
   return argv.join(' ')
 }
 
-export function runInstall(command, { attempts = 2, spawn = spawnSync, log = text => process.stderr.write(text) } = {}) {
+// npm can exit 1 without printing anything; its debug log still names the cause.
+export function latestNpmLog(env = process.env) {
+  const cache = env.npm_config_cache ?? env.NPM_CONFIG_CACHE
+    ?? (process.platform === 'win32' ? join(env.LOCALAPPDATA ?? homedir(), 'npm-cache') : join(homedir(), '.npm'))
+  try {
+    const dir = join(cache, '_logs')
+    const newest = readdirSync(dir).filter(name => name.endsWith('.log'))
+      .map(name => ({ path: join(dir, name), mtime: statSync(join(dir, name)).mtimeMs })).sort((a, b) => b.mtime - a.mtime)[0]
+    return newest && { path: newest.path, tail: readFileSync(newest.path, 'utf8').split(/\r?\n/).slice(-80).join('\n') }
+  } catch { return undefined }
+}
+
+export function runInstall(command, { attempts = 2, spawn = spawnSync, log = text => process.stderr.write(text), npmLog = latestNpmLog } = {}) {
   const reasons = []
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const result = spawn(command, { stdio: 'inherit', shell: true, windowsHide: true, timeout: 900000 })
     if (!result.error && result.status === 0 && !result.signal) return { attempts: attempt, reasons }
     reasons.push(describeExit(result))
+    const debug = npmLog()
+    if (debug) log(`::group::npm debug log ${debug.path}\n${debug.tail}\n::endgroup::\n`)
     log(`::warning::${command}: attempt ${attempt}/${attempts} failed: ${reasons.at(-1)}\n`)
   }
   throw new Error(`${command} failed after ${attempts} attempts: ${reasons.join('; ')}. Its npm output and log path are above.`)
