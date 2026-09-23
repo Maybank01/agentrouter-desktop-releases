@@ -7,13 +7,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
-import { extractFile } from '@electron/asar'
 import { load, dump } from 'js-yaml'
 import { _electron, expect } from '@playwright/test'
 import { directory, root } from './prepare.mjs'
 import { assertExternalWebNavigation } from './external-navigation-acceptance.mjs'
 import { assertCredentialRecovery } from './credential-recovery-acceptance.mjs'
 import { assertRuntimeRecovery } from './runtime-recovery-acceptance.mjs'
+import { readInstalledProductVersion } from './installed-version.mjs'
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const legacyExecutable = process.argv.find(value => value.startsWith('--legacy-executable='))?.slice('--legacy-executable='.length)
@@ -380,7 +380,7 @@ try {
       execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
         join(directory, 'update-cancel-acceptance.ps1'), '-Installer', cancelInstaller, '-InstallDirectory', dirname(candidate.executable)],
       { env, windowsHide: true, stdio: 'inherit', timeout: 75000 })
-      assert.equal(JSON.parse(extractFile(join(dirname(candidate.executable), 'resources/app.asar'), 'package.json').toString()).version,
+      assert.equal(readInstalledProductVersion(dirname(candidate.executable)),
         baseline.input.productVersion, 'Cancel must preserve the installed version')
       assert.equal(createHash('sha512').update(readFileSync(cachedInstaller)).digest('base64'), cachedDigest,
         'Cancel must preserve the verified download')
@@ -412,7 +412,7 @@ try {
       app = undefined
       await expect.poll(() => {
         try {
-          return JSON.parse(extractFile(join(dirname(candidate.executable), 'resources/app.asar'), 'package.json').toString()).version
+          return readInstalledProductVersion(dirname(candidate.executable))
         } catch { return undefined }
       }, { timeout: 180000 }).toBe(candidate.input.productVersion)
       console.log(JSON.stringify({ phase: 'installer-replaced-app', productVersion: candidate.input.productVersion }))

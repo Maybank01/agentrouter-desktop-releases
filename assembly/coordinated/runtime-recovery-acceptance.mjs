@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { copyFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -20,7 +20,16 @@ export async function assertRuntimeRecovery({ executablePath, state, home, elect
   const backup = join(state, 'runtime-node-before-interruption.exe')
   const originalHash = hash(node)
   copyFileSync(node, backup)
-  const protectedFiles = [join(home, '.credentials.yaml'), ...['package.json', 'desktop-release.json', 'pnpm-lock.yaml', 'cordis.patch.yml']
+  // A broken executable must not start even interrupted-transaction recovery.
+  // The following healthy launch will recover this journal under the real lock.
+  const pending = join(home, 'desktop/pending.json')
+  assert.equal(existsSync(pending), false)
+  const id = randomUUID(), stagingProfile = join(home, 'desktop/staging', id, 'profile')
+  mkdirSync(stagingProfile, { recursive: true })
+  const stagedFile = join(stagingProfile, 'retained-until-runtime-is-healthy.txt')
+  writeFileSync(stagedFile, 'synthetic interrupted transaction\n')
+  writeFileSync(pending, JSON.stringify({ schemaVersion: 1, id, stagingProfile, step: 'prepared' }))
+  const protectedFiles = [pending, stagedFile, join(home, '.credentials.yaml'), ...['package.json', 'desktop-release.json', 'pnpm-lock.yaml', 'cordis.patch.yml']
     .map(name => join(home, 'profiles/desktop', name))]
   const before = protectedFiles.map(hash)
   let child
@@ -44,7 +53,7 @@ export async function assertRuntimeRecovery({ executablePath, state, home, elect
     const startup = JSON.parse(readFileSync(join(home, 'desktop/startup.json'), 'utf8'))
     assert.equal(startup.events.some(event => ['preparing', 'installing', 'validating'].includes(event.stage)), false)
     return { passed: true, realTruncatedExecutable: true, explicitRepairDialog: true, cancelRetainsProfile: true,
-      failedBeforeMigration: true, durationMs: Date.now() - started }
+      failedBeforeMigration: true, pendingJournalPreserved: true, durationMs: Date.now() - started }
   } finally {
     if (child && child.exitCode === null) {
       child.kill()

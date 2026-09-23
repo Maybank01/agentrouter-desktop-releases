@@ -198,7 +198,7 @@ index a50de3a..6aaad3d 100644
      }))
      empty.hidden = plugins.length !== 0
 diff --git a/apps/desktop/scripts/prepare-seed.ts b/apps/desktop/scripts/prepare-seed.ts
-index 73da078..8d305ed 100644
+index 73da078..beef483 100644
 --- a/apps/desktop/scripts/prepare-seed.ts
 +++ b/apps/desktop/scripts/prepare-seed.ts
 @@ -50,15 +50,18 @@ function manifestVersion(path: string, subject: string): string {
@@ -222,6 +222,17 @@ index 73da078..8d305ed 100644
      nodeVersion: runtime.node,
      pnpmVersion: runtime.pnpm,
    })
+@@ -179,9 +182,9 @@ async function main(): Promise<void> {
+     archivePnpmStore(SEED_ROOT, STORE_ROOT)
+     if (macOSSigning !== undefined && signedMachOFiles !== undefined) {
+       const extractedStore = mkdtempSync(join(tmpdir(), 'dsh-desktop-seed-verification-'))
+       try {
+-        extractPnpmStoreArchives(SEED_ROOT, extractedStore)
++        await extractPnpmStoreArchives(SEED_ROOT, extractedStore)
+         const verified = verifyMacOSSeedStore(extractedStore, macOSSigning)
+         if (verified !== signedMachOFiles) {
+           throw new Error(`desktop seed: archived store contains ${verified} signed Mach-O files; expected ${signedMachOFiles}`)
+         }
 diff --git a/apps/desktop/src/host-process.ts b/apps/desktop/src/host-process.ts
 index ed18d0c..f65c89f 100644
 --- a/apps/desktop/src/host-process.ts
@@ -318,7 +329,7 @@ index d057d6d..970a2b5 100644
    readonly dshVersion: string
  } | {
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..2a03894 100644
+index 8bc9fdc..6dc9bc5 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
 @@ -1,16 +1,18 @@
@@ -410,7 +421,7 @@ index 8bc9fdc..2a03894 100644
    return window
  }
  
-@@ -130,8 +152,10 @@ async function serveShellAsset(request: Request): Promise<Response> {
+@@ -130,15 +152,17 @@ async function serveShellAsset(request: Request): Promise<Response> {
    }
  }
  
@@ -421,6 +432,14 @@ index 8bc9fdc..2a03894 100644
    const paths = resolveDesktopPaths()
    const development = developmentProject()
    const activeProject = development ?? paths.profile
+   const hostInspectPort = developmentHostInspectPort(development !== undefined)
+   const manager = new DesktopProjectManager(paths, resources)
+-  if (development === undefined) manager.recover()
++  // applyRelease recovers under its transaction lock, after the runtime probe.
+   let host: DesktopHostProcess | undefined
+   let mainWindow: BrowserWindow | undefined
+   let pluginWindow: BrowserWindow | undefined
+   let shellInstallerOwnsQuit = false
 @@ -146,20 +170,87 @@ async function main(): Promise<void> {
    const locale = resolveDesktopLocale(app.getLocale())
    const messages = locale.messages

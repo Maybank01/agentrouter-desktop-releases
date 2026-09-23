@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "ee5ee1791b5761a442c5087c85be9cac6c53e7bd",
+  "commit": "a1a65311f8b9a95d0ccb8c705dd3a7f60836ac63",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 36360,
-      "sha256": "4273f1e8ac4625153f944c9016e15a17f1e0b0a8434927ecbf5e5c119db8905b"
+      "bytes": 36267,
+      "sha256": "13aac7d55cd991a2f56e19025673ba38c550c79fe6435c80695ae246d09e4970"
     },
     {
       "path": "agentrouter-icon.svg",
@@ -32,8 +32,8 @@
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 130776,
-      "sha256": "5433d712c780619373968e5986f35f571bd28dac2a248a29c17f3edef752afac"
+      "bytes": 131902,
+      "sha256": "1b17f7475db80916f4f9b86b7e6c7a4e1be06be6d42ddc5e010b747f8fd84be9"
     },
     {
       "path": "installer-acceptance.mjs",
@@ -82,8 +82,8 @@
     },
     {
       "path": "test.mjs",
-      "bytes": 858,
-      "sha256": "44411e8c08ca323a9b287882ad981720d8ba02bbae47f07ccd6260f856e5e473"
+      "bytes": 879,
+      "sha256": "982d78c61f15c141db441f54f425eef87507e0bd9207923b84e85e309f798562"
     },
     {
       "path": "upstream.lock.json",
@@ -237,13 +237,23 @@
     },
     {
       "path": "runtime-recovery-acceptance.mjs",
-      "bytes": 3169,
-      "sha256": "d7a4caf1860b317d4349c9a2e7fe61ea5fab200d01c28b8a1403ee99eb29feee"
+      "bytes": 3889,
+      "sha256": "3a8e03c0d6695de356007454cf4f5d9f043386496594933a129158c04533c410"
     },
     {
       "path": "runtime-recovery-acceptance.ps1",
       "bytes": 1916,
       "sha256": "2d365e177631679d45dba0b7aa3d7e5adc0bb041831cffc22460b6f4c1fd860a"
+    },
+    {
+      "path": "installed-version.mjs",
+      "bytes": 387,
+      "sha256": "9daa198bdb2f218bc6a4f614a50074c4d60436bbdb9b0820e30be381d2381e3e"
+    },
+    {
+      "path": "installed-version.test.mjs",
+      "bytes": 1575,
+      "sha256": "359a1d39b0c3070cd4a8a1e43af166b9f42178b835caf5d405a0aa3491479aed"
     }
   ]
 }
