@@ -17,6 +17,14 @@ const writeJson = (path, data) => writeFileSync(path, JSON.stringify(data, null,
 const targetFile = resolve(process.argv[2])
 const target = json(targetFile)
 const signedReceiptFile = process.argv.find(value => value.startsWith('--signed-installer='))?.slice('--signed-installer='.length)
+// Each scenario installs the target on its own disposable worker so CI can run
+// them in parallel. Without --scenario the release path keeps its full sequence:
+// native update from the baseline, then legacy migration onto that installation.
+const scenarios = ['native-updater', 'legacy-migration', 'fresh-install-recovery']
+const scenario = process.argv.find(value => value.startsWith('--scenario='))?.slice('--scenario='.length)
+assert.ok(scenario === undefined || scenarios.includes(scenario), `Unknown scenario ${scenario}; expected one of ${scenarios.join(', ')}`)
+const selected = new Set(scenario ? [scenario] : ['native-updater', 'legacy-migration'])
+const nativeUpdater = selected.has('native-updater')
 const signedTarget = signedReceiptFile ? json(resolve(signedReceiptFile)) : undefined
 if (signedTarget) {
   assert.equal(signedTarget.signed, true)
@@ -36,7 +44,7 @@ async function run(exe, args, name, overrides = {}) {
   child.stdout.pipe(output, { end: false }); child.stderr.pipe(output, { end: false })
   // Native acceptance uses only synthetic accounts. Stream its evidence so a
   // failing cleanup cannot hide the actual fault until the job-level timeout.
-  if (name === 'native-updater' || name === 'legacy-migration') {
+  if (scenarios.includes(name)) {
     child.stdout.pipe(process.stderr, { end: false })
     child.stderr.pipe(process.stderr, { end: false })
   }
@@ -48,21 +56,20 @@ async function run(exe, args, name, overrides = {}) {
 }
 const node = (script, args, name) => run(process.execPath, [join(directory, script), ...args], name)
 const lastResult = log => JSON.parse(readFileSync(log, 'utf8').trim().split(/\r?\n/).at(-1))
-const baselineInput = json(join(directory, 'installer-baseline.json'))
-assert.equal(baselineInput.dshVersion, target.input.dshVersion)
-// Native-update acceptance uses identical plugin/runtime inputs to prove shell
-// updates retain the active graph. The legacy installer below still exercises
-// a real old-plugin migration, including stale registry metadata.
-baselineInput.plugin = target.input.plugin
-let baselineInputFile = join(work, 'baseline-input.json')
-writeJson(baselineInputFile, baselineInput)
-if (signedTarget) {
-  baselineInput.signing = target.input.signing
-  baselineInputFile = join(work, 'signed-baseline-input.json')
+let baselineFile, baseline
+if (nativeUpdater) {
+  // Native-update acceptance uses identical plugin/runtime inputs to prove shell
+  // updates retain the active graph, so the baseline always takes the target's
+  // plugin. The legacy installer still exercises a real old-plugin migration,
+  // including stale registry metadata.
+  const baselineInput = { ...json(join(directory, 'installer-baseline.json')), plugin: target.input.plugin,
+    ...(signedTarget ? { signing: target.input.signing } : {}) }
+  assert.equal(baselineInput.dshVersion, target.input.dshVersion)
+  const baselineInputFile = join(work, signedTarget ? 'signed-baseline-input.json' : 'baseline-input.json')
   writeJson(baselineInputFile, baselineInput)
+  baselineFile = lastResult(await node('build.mjs', [baselineInputFile], 'build-baseline')).candidate
+  baseline = json(baselineFile)
 }
-const baselineFile = lastResult(await node('build.mjs', [baselineInputFile], 'build-baseline')).candidate
-const baseline = json(baselineFile)
 const files = new Map()
 const requests = []
 const transfers = []
@@ -96,55 +103,81 @@ const install = (installer, destination, name) => run('powershell.exe', ['-NoPro
   '$ErrorActionPreference = "Stop"; $p = Start-Process -FilePath $env:AGENTROUTER_TEST_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:AGENTROUTER_TEST_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "NSIS failed: $($p.ExitCode)" }'], name,
 { AGENTROUTER_TEST_INSTALLER: installer, AGENTROUTER_TEST_INSTALL_DIR: destination })
 try {
-  const baselinePackage = json(lastResult(await node('package-installer.mjs', [baselineFile, (signedTarget ? '--signed-test-feed=' : '--test-feed=') + feed], 'package-baseline')).installerReceipt)
-  const targetPackageFile = signedReceiptFile ?? lastResult(await node('package-installer.mjs', [targetFile, '--test-feed=' + feed], 'package-target')).installerReceipt
-  const targetPackage = json(targetPackageFile)
-  for (const receipt of [baselinePackage, targetPackage]) for (const file of receipt.assets) files.set(file.name, { path: join(receipt.output, file.name), bytes: file.bytes })
+  // Packages go to separate candidate outputs; build both NSIS installers at once.
+  const packageInstaller = (candidate, feedArg, name) => node('package-installer.mjs', [candidate, feedArg + feed], name)
+    .then(log => json(lastResult(log).installerReceipt))
+  const [baselinePackage, targetPackage] = await Promise.all([
+    nativeUpdater ? packageInstaller(baselineFile, signedTarget ? '--signed-test-feed=' : '--test-feed=', 'package-baseline') : undefined,
+    signedReceiptFile ? json(signedReceiptFile) : packageInstaller(targetFile, '--test-feed=', 'package-target'),
+  ])
+  for (const receipt of [baselinePackage, targetPackage]) if (receipt) for (const file of receipt.assets) files.set(file.name, { path: join(receipt.output, file.name), bytes: file.bytes })
   const installed = join(work, 'installed')
-  await install(baselinePackage.installer, installed, 'install-baseline')
   const executable = join(installed, 'AgentRouter.exe')
-  assert.ok(existsSync(executable))
-  const installedBaseline = join(work, 'baseline-installed.json')
   const installedTarget = join(work, 'target-installed.json')
-  writeJson(installedBaseline, { ...baseline, executable })
   writeJson(installedTarget, { ...target, executable })
-  await node('acceptance.mjs', [installedBaseline, installedTarget, '--native-update'], 'native-updater')
-  const update = json(join(target.output, 'acceptance.json'))
-  assert.equal(update.installerUpgrade, true)
-  assert.equal(update.nativeUpdateMetrics.cancelledInstallerRetried, true)
-  assert.equal(update.nativeUpdateMetrics.verifiedDownloadRetained, true)
-  assert.equal(update.nativeUpdateMetrics.quitVetoHandled, true)
-  assert.equal(update.nativeUpdateMetrics.unrelatedProcessPreserved, true)
-  assert.ok(requests.includes('latest.yml') && requests.some(name => name === targetPackage.assets.find(asset => asset.name.endsWith('.exe')).name))
-  if (signedTarget) assert.ok(requests.includes('agentrouter-update.json'), 'The installed native updater must request and verify the signed manifest')
+  let update, differential, legacy, migration, freshInstallRecovery
+  if (nativeUpdater) {
+    await install(baselinePackage.installer, installed, 'install-baseline')
+    assert.ok(existsSync(executable))
+    const installedBaseline = join(work, 'baseline-installed.json')
+    writeJson(installedBaseline, { ...baseline, executable })
+    await node('acceptance.mjs', [installedBaseline, installedTarget, '--native-update'], 'native-updater')
+    update = json(join(target.output, 'acceptance.json'))
+    assert.equal(update.installerUpgrade, true)
+    assert.equal(update.nativeUpdateMetrics.cancelledInstallerRetried, true)
+    assert.equal(update.nativeUpdateMetrics.verifiedDownloadRetained, true)
+    assert.equal(update.nativeUpdateMetrics.quitVetoHandled, true)
+    assert.equal(update.nativeUpdateMetrics.unrelatedProcessPreserved, true)
+    assert.ok(requests.includes('latest.yml') && requests.some(name => name === targetPackage.assets.find(asset => asset.name.endsWith('.exe')).name))
+    if (signedTarget) assert.ok(requests.includes('agentrouter-update.json'), 'The installed native updater must request and verify the signed manifest')
 
-  const installerAsset = targetPackage.assets.find(asset => asset.name.endsWith('.exe'))
-  const installerTransfers = transfers.filter(entry => entry.name === installerAsset.name)
-  const downloadedBytes = installerTransfers.reduce((sum, entry) => sum + entry.bytes, 0)
-  assert.ok(installerTransfers.length > 0 && installerTransfers.every(entry => entry.range), 'Native updater must use differential ranges without full-download fallback')
-  assert.ok(downloadedBytes < installerAsset.bytes * 0.2, 'A shell-only update must transfer less than 20% of the full installer')
-  const differential = { fullBytes: installerAsset.bytes, downloadedBytes,
-    ratio: downloadedBytes / installerAsset.bytes, requests: installerTransfers.length, fullFallback: false }
-  console.error(JSON.stringify({ differential }))
+    const installerAsset = targetPackage.assets.find(asset => asset.name.endsWith('.exe'))
+    const installerTransfers = transfers.filter(entry => entry.name === installerAsset.name)
+    const downloadedBytes = installerTransfers.reduce((sum, entry) => sum + entry.bytes, 0)
+    assert.ok(installerTransfers.length > 0 && installerTransfers.every(entry => entry.range), 'Native updater must use differential ranges without full-download fallback')
+    assert.ok(downloadedBytes < installerAsset.bytes * 0.2, 'A shell-only update must transfer less than 20% of the full installer')
+    differential = { fullBytes: installerAsset.bytes, downloadedBytes,
+      ratio: downloadedBytes / installerAsset.bytes, requests: installerTransfers.length, fullFallback: false }
+    console.error(JSON.stringify({ differential }))
+  } else {
+    // A fresh installation of the target, independent of any native-update state.
+    await install(targetPackage.installer, installed, 'install-target')
+    assert.ok(existsSync(executable))
+  }
 
-  const legacy = json(join(directory, 'legacy-installer.json'))
-  const legacyInstaller = join(work, legacy.filename)
-  const response = await fetch(legacy.url)
-  assert.equal(response.status, 200)
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(legacyInstaller))
-  assert.equal(createHash('sha256').update(readFileSync(legacyInstaller)).digest('hex'), legacy.sha256)
-  const legacyDirectory = join(work, 'previous-community')
-  await install(legacyInstaller, legacyDirectory, 'install-legacy')
-  await node('acceptance.mjs', [installedTarget, '--legacy-executable=' + join(legacyDirectory, 'DSH Desktop.exe')], 'legacy-migration')
-  const migration = json(join(target.output, 'acceptance.json'))
-  assert.equal(migration.legacyProfileMigration, true)
+  if (selected.has('legacy-migration')) {
+    legacy = json(join(directory, 'legacy-installer.json'))
+    const legacyInstaller = join(work, legacy.filename)
+    const response = await fetch(legacy.url)
+    assert.equal(response.status, 200)
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(legacyInstaller))
+    assert.equal(createHash('sha256').update(readFileSync(legacyInstaller)).digest('hex'), legacy.sha256)
+    const legacyDirectory = join(work, 'previous-community')
+    await install(legacyInstaller, legacyDirectory, 'install-legacy')
+    await node('acceptance.mjs', [installedTarget, '--legacy-executable=' + join(legacyDirectory, 'DSH Desktop.exe')], 'legacy-migration')
+    migration = json(join(target.output, 'acceptance.json'))
+    assert.equal(migration.legacyProfileMigration, true)
+  }
+
+  if (selected.has('fresh-install-recovery')) {
+    // The single-install path of signed installed acceptance: a fresh Profile,
+    // interrupted runtime repair, then explicit credential-file recovery.
+    await node('acceptance.mjs', [installedTarget], 'fresh-install-recovery')
+    freshInstallRecovery = json(join(target.output, 'acceptance.json'))
+    assert.equal(freshInstallRecovery.productUpgrade, false)
+    assert.equal(freshInstallRecovery.externalBrowserNavigation, true)
+    assert.equal(freshInstallRecovery.runtimeRecovery?.passed, true)
+    assert.equal(freshInstallRecovery.credentialRecovery?.existingSessionRetained, true)
+    assert.equal(freshInstallRecovery.credentialRecovery?.signInAvailable, true)
+  }
   const receipt = { schemaVersion: 1, passed: true, testOnly: true, signed: Boolean(signedTarget),
     productVersion: target.input.productVersion, plugin: target.input.plugin, patchSha256: target.patchSha256,
     targetInstaller: targetPackage, legacyInstaller: legacy,
-    freshInstallerExecuted: true, nativeUpdaterExecuted: true, installerRestartedApp: true,
-    legacyInstallerExecuted: true, publicFeedChanged: false, update, migration,
-    nativeSignatureVerificationExecuted: Boolean(signedTarget), rootTrustInstalled: false,
+    freshInstallerExecuted: true, nativeUpdaterExecuted: nativeUpdater, installerRestartedApp: nativeUpdater,
+    legacyInstallerExecuted: selected.has('legacy-migration'), publicFeedChanged: false, update, migration,
+    nativeSignatureVerificationExecuted: Boolean(signedTarget) && nativeUpdater, rootTrustInstalled: false,
     differential, feedRequests: [...new Set(requests)] }
+  if (scenario) Object.assign(receipt, { scenario, freshInstallRecovery })
   writeJson(join(target.output, 'installer-acceptance.json'), receipt)
   console.log(JSON.stringify({ passed: true, receipt: join(target.output, 'installer-acceptance.json') }))
 } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }

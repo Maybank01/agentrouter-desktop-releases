@@ -34,12 +34,14 @@ jobs:
       - id: scope
         name: Select checks from changed inputs
         run: node assembly/ci-scope.mjs
+  # Installed checks run in parallel on separate disposable Windows workers.
+  # Every job must pass; release.yml keeps the full sequential acceptance.
   coordinated:
-    name: Installed product update and legacy migration
+    name: Adapter transactions and pnpm store migration
     needs: bootstrap
     if: needs.bootstrap.outputs.installed == 'true'
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -47,35 +49,43 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24.15.0
-      - name: Record adapter source and public executor
+      - name: Record adapter-source.json and public executor
         env:
           AGENTROUTER_EXECUTOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
           AGENTROUTER_EXECUTOR_WORKFLOW_REF: ${{ github.workflow_ref }}
-        shell: pwsh
-        run: |
-          @'
-          const { appendFileSync, readFileSync } = require('node:fs');
-          const { createHash } = require('node:crypto');
-          const bytes = readFileSync('assembly/coordinated/adapter-source.json');
-          const source = JSON.parse(bytes);
-          const env = process.env;
-          const identity = {
-            sourceRepository: source.repository, sourceCommit: source.commit,
-            adapterManifestSha256: createHash('sha256').update(bytes).digest('hex'),
-            executorRepository: env.GITHUB_REPOSITORY, executorCommit: env.GITHUB_SHA,
-            workflow: env.AGENTROUTER_EXECUTOR_WORKFLOW_REF,
-            workflowCommit: env.AGENTROUTER_EXECUTOR_WORKFLOW_SHA,
-            runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
-            platform: env.RUNNER_OS,
-          };
-          const json = JSON.stringify(identity, null, 2);
-          appendFileSync(env.GITHUB_STEP_SUMMARY, '## Desktop validation inputs\n\n```json\n' + json + '\n```\n\nAcceptance requires both jobs to pass. Installer hashes and migration results are recorded in the installed acceptance step. Test installers stay on this disposable worker.\n');
-          console.log(json);
-          '@ | node
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: node assembly/ci-identity.mjs adapter
       - run: npm test
       - run: npm ci --ignore-scripts --prefix assembly/coordinated
       - run: node assembly/coordinated/test.mjs
       - run: node assembly/coordinated/store-migration-acceptance.mjs
+  installed:
+    name: Installed ${{ matrix.title }}
+    needs: bootstrap
+    if: needs.bootstrap.outputs.installed == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: native-updater
+            title: native update and restart
+          - scenario: legacy-migration
+            title: legacy Profile migration
+          - scenario: fresh-install-recovery
+            title: fresh install with runtime and credential recovery
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - name: Record adapter-source.json and public executor
+        env:
+          AGENTROUTER_EXECUTOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          AGENTROUTER_EXECUTOR_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: node assembly/ci-identity.mjs ${{ matrix.scenario }}
+      - run: npm ci --ignore-scripts --prefix assembly/coordinated
       - name: Build and accept the product installer on a disposable worker
-        run: node assembly/coordinated-candidate.mjs
+        run: node assembly/coordinated-candidate.mjs --scenario=${{ matrix.scenario }}

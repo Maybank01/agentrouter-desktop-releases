@@ -22,7 +22,6 @@ const first = json(resolve(process.argv[2]))
 const baseline = legacyExecutable ? { executable: resolve(legacyExecutable), legacy: true,
   input: { productVersion: '2.0.5', dshVersion: '0.1.2-rc.1', plugin: { version: '0.1.0-beta.23' } } } : first
 const candidate = legacyExecutable ? first : process.argv[3] && !process.argv[3].startsWith('--') ? json(resolve(process.argv[3])) : undefined
-const migratePnpm10 = process.argv.includes('--pnpm10')
 const nativeUpdate = process.argv.includes('--native-update')
 if (nativeUpdate) {
   assert.equal(process.platform, 'win32')
@@ -32,7 +31,6 @@ if (nativeUpdate) {
   assert.equal(candidate.executable, baseline.executable)
   assert.ok(resolve(baseline.executable).startsWith(resolve(process.env.RUNNER_TEMP) + sep))
 }
-assert.ok(!migratePnpm10 || candidate, '--pnpm10 requires a baseline and target candidate')
 const stateRoot = join(root, '.local/coordinated/acceptance')
 mkdirSync(stateRoot, { recursive: true })
 const state = mkdtempSync(join(stateRoot, 'run-'))
@@ -226,43 +224,7 @@ const sessionStatus = async sessionId => {
   const listing = await rpc('session/list', { _request: {} })
   return listing.items.find(item => item.sessionId === sessionId)
 }
-const oldPnpmGraph = profile => {
-  console.log(JSON.stringify({ phase: 'preparing-pnpm10-fixture' }))
-  assert.equal(app, undefined, 'Close the isolated app before rebuilding its dependencies')
-  const modules = resolve(profile, 'node_modules')
-  const backup = resolve(state, `modules-before-pnpm10-${randomUUID()}`)
-  assert.ok(modules.startsWith(resolve(home) + sep) && backup.startsWith(resolve(state) + sep))
-  renameSync(modules, backup)
-  const npmrc = join(state, 'pnpm10-npmrc')
-  writeFileSync(npmrc, 'registry=https://registry.npmjs.org/\n')
-  const commandEnv = { ...env }
-  for (const name of Object.keys(commandEnv)) if (/^(?:npm|pnpm|corepack)_/i.test(name)) delete commandEnv[name]
-  const pnpm = join(directory, 'node_modules/pnpm10/bin/pnpm.cjs')
-  const workspacePath = join(profile, 'pnpm-workspace.yaml')
-  const workspaceText = readFileSync(workspacePath, 'utf8')
-  const workspace = load(workspaceText)
-  // pnpm 10 cannot parse pnpm 11's file-qualified allowBuilds keys. Creating the
-  // old graph never runs scripts; restore the immutable Desktop config afterwards.
-  delete workspace.allowBuilds
-  writeFileSync(workspacePath, dump(workspace))
-  try {
-    execFileSync(process.execPath, [pnpm, `--config.store-dir=${join(home, 'desktop/pnpm/store')}`,
-      `--config.userconfig=${npmrc}`, 'add', 'dsh-image-viewer@0.1.0-beta.11', '--save-exact', '--ignore-scripts'],
-    { cwd: profile, env: { ...commandEnv, CI: '1' }, encoding: 'utf8', windowsHide: true,
-      timeout: 480000, stdio: 'pipe', maxBuffer: 8 * 1024 * 1024 })
-  } finally { writeFileSync(workspacePath, workspaceText) }
-  const manifestPath = join(profile, 'package.json')
-  const manifest = json(manifestPath)
-  if (!manifest.dsh.profile.bundles.includes('dsh-image-viewer')) manifest.dsh.profile.bundles.push('dsh-image-viewer')
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
-  assert.match(load(readFileSync(join(modules, '.modules.yaml'), 'utf8')).packageManager, /^pnpm@10\./)
-  console.log(JSON.stringify({ phase: 'pnpm10-fixture-ready' }))
-}
-const verifyMigratedGraph = profile => {
-  assert.match(load(readFileSync(join(profile, 'node_modules/.modules.yaml'), 'utf8')).packageManager, /^pnpm@11\./)
-  assert.equal(json(join(profile, 'node_modules/dsh-image-viewer/package.json')).version, '0.1.0-beta.11')
-}
-const staleRegistryMetadata = !!candidate && (migratePnpm10 || !!legacyExecutable)
+const staleRegistryMetadata = !!candidate && !!legacyExecutable
 const prepareStaleRegistryMetadata = async () => {
   if (!staleRegistryMetadata) return
   const metadata = join(home, 'desktop/pnpm/cache/pnpm/v11/metadata/registry.npmjs.org')
@@ -354,7 +316,6 @@ try {
   if (candidate) {
     if (!legacyExecutable) assert.equal(baseline.input.dshVersion, candidate.input.dshVersion, 'This test must update the plugin while retaining DSH.')
     if (!nativeUpdate) assert.notEqual(baseline.input.plugin.version, candidate.input.plugin.version)
-    if (migratePnpm10) oldPnpmGraph(profile)
     if (nativeUpdate) {
       await launch(baseline)
       // The native menu still checks the same coordinator; defer its combined
@@ -480,7 +441,6 @@ try {
       assert.equal(json(join(profile, 'node_modules/dsh-image-viewer/package.json')).version, legacyViewer)
       assert.ok(!json(join(profile, 'package.json')).dsh.profile.bundles.includes('@agentrouter-top/dsh-plugin'))
     }
-    if (migratePnpm10) verifyMigratedGraph(profile)
     assert.equal((await api('status')).connected, true)
     assert.equal((await api('updates/status')).owner, 'product')
     assert.equal((await api('updates/status')).canInstall, false)
@@ -512,21 +472,6 @@ try {
     assert.equal(readFileSync(join(profile, 'cordis.patch.yml'), 'utf8'), patch)
     await page.screenshot({ path: join(state, 'product-upgrade.png') })
     await close()
-    if (migratePnpm10) {
-      oldPnpmGraph(profile)
-      await launch(candidate)
-      verifyMigratedGraph(profile)
-      assert.equal((await api('status')).connected, true)
-      assert.ok(await sessionStatus(session.sessionId))
-      assert.equal(readFileSync(join(profile, 'cordis.patch.yml'), 'utf8'), patch)
-      await close()
-      const modules = join(profile, 'node_modules/.modules.yaml')
-      const beforeStartup = { text: readFileSync(modules, 'utf8'), mtime: statSync(modules).mtimeMs }
-      await launch(candidate)
-      assert.equal((await api('status')).connected, true)
-      await close()
-      assert.deepEqual({ text: readFileSync(modules, 'utf8'), mtime: statSync(modules).mtimeMs }, beforeStartup)
-    }
   }
   let credentialRecovery, runtimeRecovery
   if (!candidate && !legacyExecutable) {
@@ -541,6 +486,15 @@ try {
     assert.equal((await api('connect', { apiKey: 'sk-desktop-acceptance-fixture' })).connected, true)
     credentialRecovery.existingSessionRetained = true
     credentialRecovery.signInAvailable = true
+  } else if (candidate && !legacyExecutable && process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+    // Exercise the native repair prompt on the updated candidate before signing:
+    // its first run used to be the signed installed acceptance, costing a version.
+    await close()
+    runtimeRecovery = await assertRuntimeRecovery({ executablePath: candidate.executable, state, home, electronHome, env })
+    await launch(candidate)
+    assert.equal((await api('status')).connected, true, 'The restored runtime must recover the interrupted journal and reconnect')
+    assert.ok(await sessionStatus(session.sessionId), 'Runtime recovery must retain the existing conversation')
+    runtimeRecovery.restoredLaunchConnected = true
   }
   const receipt = { passed: true, state, electronGui: true, offlineSeedInstall: true, accountFixture: true,
     productUpgrade: !!candidate, dshUnchanged: candidate?.input.dshVersion === baseline.input.dshVersion, credentialsPreserved: !!candidate,
@@ -549,11 +503,12 @@ try {
     realAccountUsed: false, nativeSessionApi: true, nativeModelHistoryRetained: !!candidate, installerUpgrade: nativeUpdate, loopbackFeedUpgrade: nativeUpdate,
     automaticInstallerRestart: nativeUpdate, publicFeedUpgrade: false, legacyProfileMigration: !!legacyExecutable,
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
-  Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
-    thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
-    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, runtimeRecovery, launches })
+  Object.assign(receipt, { thirdPartyPluginPreserved: !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
+    nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, runtimeRecovery, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
-  if (candidate) writeFileSync(join(candidate.output, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
+  // Single-install scenarios also leave their evidence in the target's output.
+  const evidence = (candidate ?? first).output
+  if (evidence) writeFileSync(join(evidence, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))
 } catch (error) {
   console.error(error)
