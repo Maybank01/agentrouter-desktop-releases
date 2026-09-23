@@ -129,7 +129,9 @@ const launch = async receipt => {
     }
     await page.waitForURL('dsh-app://app/index.html', { timeout: 180000 })
     if (receipt.input.productVersion === candidate?.input.productVersion) {
-      await expect.poll(() => json(join(home, 'desktop/startup.json')).ready, { timeout: 10000 }).toBe(true)
+      // The client rewrites this diagnostic record in place; a slow worker can
+      // observe it truncated between writes, so a partial read means not ready yet.
+      await expect.poll(() => { try { return json(join(home, 'desktop/startup.json')).ready } catch { return false } }, { timeout: 30000 }).toBe(true)
       const startup = json(join(home, 'desktop/startup.json'))
       assert.ok(Number.isFinite(startup.maxMainThreadDelayMs) && startup.maxMainThreadDelayMs < 5000,
         `Startup must keep the native window responsive, longest stall: ${startup.maxMainThreadDelayMs} ms`)
