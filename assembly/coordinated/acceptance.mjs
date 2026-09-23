@@ -82,6 +82,7 @@ const debuggerDetachWait = new WeakSet()
 let nativeUpdateMetrics
 let unrelatedProcess
 let externalBrowserNavigation = false
+let acceptancePassed = false
 const launch = async receipt => {
   const started = Date.now()
   console.log(JSON.stringify({ phase: 'launching', productVersion: receipt.input.productVersion }))
@@ -528,6 +529,7 @@ try {
   const evidence = (candidate ?? first).output
   if (evidence) writeFileSync(join(evidence, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))
+  acceptancePassed = true
 } catch (error) {
   console.error(error)
   if (existsSync(join(state, 'startup-error.log'))) console.error(readFileSync(join(state, 'startup-error.log'), 'utf8'))
@@ -544,13 +546,30 @@ try {
   throw error
 } finally {
   unrelatedProcess?.kill()
+  const quitStarted = Date.now()
   try { await close() }
   catch (error) {
-    // This is cleanup after acceptance failed, never proof of a successful
-    // updater handoff. Kill only the process launched by this isolated driver.
-    console.error(error)
-    app?.process().kill()
-    throw error
+    const child = app?.process()
+    if (!acceptancePassed) {
+      // This is cleanup after acceptance failed, never proof of a successful
+      // updater handoff. Kill only the process launched by this isolated driver.
+      console.error(error)
+      child?.kill()
+      throw error
+    }
+    // Every assertion already passed (updater quit is verified separately). A
+    // slow final quit is recorded with evidence for investigation instead of
+    // discarding the accepted result.
+    let processes = 'unavailable'
+    try {
+      const pid = Number(child?.pid ?? 0)
+      processes = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq ${pid} -or $_.ParentProcessId -eq ${pid} } | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress`],
+      { encoding: 'utf8', windowsHide: true, timeout: 15000 }).trim()
+    } catch {}
+    const log = existsSync(join(state, 'electron.log')) ? readFileSync(join(state, 'electron.log'), 'utf8').slice(-4000) : ''
+    console.log(JSON.stringify({ phase: 'slow-quit-after-acceptance', waitedMs: Date.now() - quitStarted, pid: child?.pid, processes, electronLogTail: log }))
+    child?.kill()
   } finally {
     gateway.closeAllConnections()
     await new Promise(resolve => gateway.close(resolve))
