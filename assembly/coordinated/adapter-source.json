@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "364984358f9f823c4a7428a25f87248bfee1a841",
+  "commit": "ee5ee1791b5761a442c5087c85be9cac6c53e7bd",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 34892,
-      "sha256": "8a6def4d3dfbb38a01383127a25e80b60147548e4c1c1991fed29ba915d5e4f7"
+      "bytes": 36360,
+      "sha256": "4273f1e8ac4625153f944c9016e15a17f1e0b0a8434927ecbf5e5c119db8905b"
     },
     {
       "path": "agentrouter-icon.svg",
@@ -32,8 +32,8 @@
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 109577,
-      "sha256": "73326434bee96d174e67661f997a03378b32c19990a96bf87a7a930ac6ac0481"
+      "bytes": 130776,
+      "sha256": "5433d712c780619373968e5986f35f571bd28dac2a248a29c17f3edef752afac"
     },
     {
       "path": "installer-acceptance.mjs",
@@ -67,8 +67,8 @@
     },
     {
       "path": "prepare.mjs",
-      "bytes": 3162,
-      "sha256": "82b9f68640f6f99a23fd8c36c55aa3804b151d6cefb691cd03c921f05c117243"
+      "bytes": 3285,
+      "sha256": "57b298a82ba84cc11e202f186b6ae05a47cae83a4329c2df0a3f62fb73f884d1"
     },
     {
       "path": "release.json",
@@ -82,8 +82,8 @@
     },
     {
       "path": "test.mjs",
-      "bytes": 838,
-      "sha256": "39b00095df9b932e24db4ccae8f93258dc423f00b850bf9a14f05ff10820881c"
+      "bytes": 858,
+      "sha256": "44411e8c08ca323a9b287882ad981720d8ba02bbae47f07ccd6260f856e5e473"
     },
     {
       "path": "upstream.lock.json",
@@ -161,6 +161,11 @@
       "sha256": "2591e0eb8bda9cb1959209ddf631fb6c38332a252ea3da6f0c2f5193baad40bc"
     },
     {
+      "path": "installer-diagnostics.ps1",
+      "bytes": 1235,
+      "sha256": "563bb37cff7fb281f596c12b4fe677c8d28dc34cf1366ab60485e95e97f20596"
+    },
+    {
       "path": "verify-native-icon.ps1",
       "bytes": 953,
       "sha256": "f10a87404417f23e36e9107e1e531ff9f33de69e227bae481f61a2290860a80b"
@@ -182,8 +187,8 @@
     },
     {
       "path": "release-history.json",
-      "bytes": 3116,
-      "sha256": "a3da08f9504645d072f79d82afb1474313b93371f31b559c4c2729ba32d15617"
+      "bytes": 3341,
+      "sha256": "b4724727ddff569f5e29892efaf4debc8ecea033c76c66f1fd16e3ed95ee238b"
     },
     {
       "path": "update-center.md",
@@ -219,6 +224,26 @@
       "path": "external-navigation-acceptance.mjs",
       "bytes": 2442,
       "sha256": "988274d3878ee84c641a0fbd0c869c127da49b7bd4ad9cc19d97f2ae3478bd76"
+    },
+    {
+      "path": "runtime-recovery.mjs",
+      "bytes": 3156,
+      "sha256": "3a5d5209dec4740773d9ea8afdce6bdf9a74e7d62e289d4b886a161f241f5533"
+    },
+    {
+      "path": "runtime-recovery.test.mjs",
+      "bytes": 2311,
+      "sha256": "cc51c9b6715b9eb3c9e1cc07fc71ebd6134f33a6926127e0f039628e1f44dfaf"
+    },
+    {
+      "path": "runtime-recovery-acceptance.mjs",
+      "bytes": 3169,
+      "sha256": "d7a4caf1860b317d4349c9a2e7fe61ea5fab200d01c28b8a1403ee99eb29feee"
+    },
+    {
+      "path": "runtime-recovery-acceptance.ps1",
+      "bytes": 1916,
+      "sha256": "2d365e177631679d45dba0b7aa3d7e5adc0bb041831cffc22460b6f4c1fd860a"
     }
   ]
 }

@@ -2,7 +2,9 @@ diff --git a/apps/desktop-host/src/index.ts b/apps/desktop-host/src/index.ts
 index e85badb..f06f24a 100644
 --- a/apps/desktop-host/src/index.ts
 +++ b/apps/desktop-host/src/index.ts
-@@ -54,8 +54,15 @@ export interface DesktopHostFetchCommand {
+@@ -52,12 +52,19 @@ export interface DesktopHostFetchCommand {
+ 
+ /** Commands accepted by the desktop child process. */
  export type DesktopHostCommand = {
    readonly type: 'shutdown'
 +} | {
@@ -18,14 +20,22 @@ index e85badb..f06f24a 100644
 +} | {
    readonly type: 'ready'
    readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
-@@ -68,4 +75,6 @@ export type DesktopHostEvent = {
+   readonly dshVersion: string
+ } | {
+@@ -66,8 +73,10 @@ export type DesktopHostEvent = {
+ }
+ 
  /** Controller returned to tests and the self-executing process entry. */
  export interface DesktopHostController {
 +  prepareRestart(): Promise<boolean>
 +  cancelRestart(): void
    /** Installed dsh version carried by this host. */
    readonly dshVersion: string
-@@ -83,6 +92,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
+   /** Dispatch one custom-protocol request and stream its response to the response pipe. */
+   fetch(command: DesktopHostFetchCommand, body: ReadableStream<Uint8Array> | null): Promise<void>
+@@ -81,10 +90,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
+   return typeof value === 'object' && value !== null
+ }
  
  function isDesktopHostCommand(message: unknown): message is DesktopHostCommand {
 -  return typeof message === 'object' && message !== null && 'type' in message
@@ -35,7 +45,11 @@ index e85badb..f06f24a 100644
 +    && Number.isSafeInteger(message.requestId) && Number(message.requestId) > 0)
  }
  
-@@ -287,8 +297,18 @@ export async function runDesktopHost(
+ interface PackageManifest {
+   readonly name?: string
+@@ -285,12 +295,22 @@ export async function runDesktopHost(
+   const rootConfig = join(absoluteProject, ROOT_CONFIG_FILENAME)
+   writeFileSync(rootConfig, ROOT_CONFIG)
    const environment = loadLayeredEnv('dsh desktop')
    let current: Context | undefined
 -  const ctx = await boot('dsh desktop', rootConfig, structuredClone(desktopPatches(
@@ -56,7 +70,11 @@ index e85badb..f06f24a 100644
 +  const ctx = await boot('dsh desktop', rootConfig, patches, (hostCtx) => {
      current = hostCtx
      hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
-@@ -308,7 +328,16 @@ export async function runDesktopHost(
+     provideCmdline(hostCtx, { args: [], exit: () => {} })
+   })
+@@ -306,11 +326,20 @@ export async function runDesktopHost(
+   const assets = assetHandler(ctx, absoluteProject)
+   const streams = remoteStreamHandler(ctx)
    const requests = new Map<number, AbortController>()
    let disposing: Promise<void> | undefined
 +  let releaseMaintenance: (() => void) | undefined
@@ -73,7 +91,11 @@ index e85badb..f06f24a 100644
 +      cancelRestart()
        for (const controller of requests.values()) controller.abort()
        requests.clear()
-@@ -320,4 +349,13 @@ export async function runDesktopHost(
+       await current?.fiber.dispose()
+       current = undefined
+@@ -318,14 +347,23 @@ export async function runDesktopHost(
+     await disposing
+   }
  
    return {
 +    async prepareRestart() {
@@ -87,20 +109,25 @@ index e85badb..f06f24a 100644
 +    cancelRestart,
      dshVersion: dshVersion(absoluteProject),
      cancel(streamId) {
-@@ -325,5 +363,5 @@ export async function runDesktopHost(
+       requests.get(streamId)?.abort()
      },
      async fetch(command, body) {
 -      if (disposing !== undefined) throw new Error('dsh desktop: host is disposing')
 +      if (disposing !== undefined || holding !== undefined) throw new Error('dsh desktop: host is preparing to restart')
        const controller = new AbortController()
        requests.set(command.streamId, controller)
-@@ -565,4 +603,5 @@ async function main(): Promise<void> {
+       try {
+         const url = new URL(command.request.url)
+@@ -563,14 +601,24 @@ async function main(): Promise<void> {
+     }
+   })
    requestPipe.once('error', failTransport)
    responsePipe.once('error', failTransport)
 +  let restartRequest: number | undefined
    process.on('message', (message: unknown) => {
      if (!isDesktopHostCommand(message)) {
-@@ -571,4 +610,13 @@ async function main(): Promise<void> {
+       send({ type: 'fatal', message: 'dsh desktop: invalid Electron IPC command' })
+       void stop(1)
        return
      }
 +    if (message.type === 'prepare-restart') {
@@ -114,17 +141,25 @@ index e85badb..f06f24a 100644
 +    }
      void stop()
    })
+   process.once('disconnect', () => { void stop() })
+   process.once('SIGTERM', () => { void stop() })
 diff --git a/apps/desktop/electron-builder.config.mjs b/apps/desktop/electron-builder.config.mjs
 index c47bd6d..9659de4 100644
 --- a/apps/desktop/electron-builder.config.mjs
 +++ b/apps/desktop/electron-builder.config.mjs
-@@ -12,4 +12,5 @@ import {
+@@ -10,8 +10,9 @@ import {
+   installWindowsNsisBootstrapSigner,
+ } from './scripts/windows-sign.mjs'
  import { resolveDesktopAutoUpdateConfig } from './scripts/desktop-auto-update-environment.mjs'
  import { desktopTargetBuildPaths } from './scripts/desktop-build-paths.mjs'
 +import { existsSync, readFileSync } from 'node:fs'
  
  /**
-@@ -44,10 +45,16 @@ export function createElectronBuilderConfig(
+  * Create electron-builder configuration from one release environment.
+  * @param {NodeJS.ProcessEnv} env - Packaging environment.
+@@ -42,14 +43,20 @@ export function createElectronBuilderConfig(
+     : undefined
+   if (windowsSigner !== undefined) {
      installWindowsNsisBootstrapSigner({ sign: windowsSigner })
    }
 -  const update = resolveDesktopAutoUpdateConfig(env, resolvedPlatform, resolvedArch)
@@ -144,11 +179,15 @@ index c47bd6d..9659de4 100644
 +    artifactName: product ? 'AgentRouter-${version}-${arch}-Setup.${ext}' : 'deepseek-harness-${version}-${os}-${arch}.${ext}',
      directories: { output: buildPaths.artifacts },
      asar: true,
+     files: [
+       'lib/*.js',
 diff --git a/apps/desktop/renderer/plugin-manager.js b/apps/desktop/renderer/plugin-manager.js
 index a50de3a..6aaad3d 100644
 --- a/apps/desktop/renderer/plugin-manager.js
 +++ b/apps/desktop/renderer/plugin-manager.js
-@@ -53,5 +53,6 @@ async function main() {
+@@ -51,9 +51,10 @@ async function main() {
+         void run(() => api.plugins.update(plugin.name, next), message('updating', { name: plugin.name }))
+       })
        const actions = document.createElement('span')
        actions.className = 'package-actions'
 -      actions.append(update, remove)
@@ -156,42 +195,15 @@ index a50de3a..6aaad3d 100644
 +      actions.append(remove)
        item.append(identity, actions)
        return item
-diff --git a/apps/desktop/renderer/startup.html b/apps/desktop/renderer/startup.html
-new file mode 100644
-index 0000000..0386fe5
---- /dev/null
-+++ b/apps/desktop/renderer/startup.html
-@@ -0,0 +1,25 @@
-+<!doctype html>
-+<html lang="zh-CN">
-+<meta charset="utf-8">
-+<meta name="viewport" content="width=device-width, initial-scale=1">
-+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'">
-+<title>AgentRouter</title>
-+<style>
-+  :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
-+  body { margin: 0; height: 100vh; display: grid; place-items: center; background: light-dark(#fafaf9, #191919); color: light-dark(#272727, #eee); }
-+  main { text-align: center; }
-+  img { width: 56px; height: 56px; }
-+  h1 { font-size: 22px; font-weight: 600; margin: 18px 0 28px; }
-+  p { opacity: .75; min-width: 280px; }
-+  .track { width: 220px; height: 3px; overflow: hidden; border-radius: 2px; margin: 22px auto; background: light-dark(#e4e4e4, #383838); }
-+  .bar { width: 45%; height: 100%; background: #3b9e88; animation: slide 1.6s ease-in-out infinite alternate; }
-+  @keyframes slide { from { transform: translateX(-80%); } to { transform: translateX(210%); } }
-+  @media (prefers-reduced-motion: reduce) { .bar { animation: none; margin: auto; } }
-+</style>
-+<main>
-+  <img src="agentrouter-icon.png" alt="">
-+  <h1>AgentRouter</h1>
-+  <p id="status" role="status" aria-live="polite">正在启动 AgentRouter…</p>
-+  <div class="track" aria-hidden="true"><div class="bar"></div></div>
-+</main>
-+</html>
+     }))
+     empty.hidden = plugins.length !== 0
 diff --git a/apps/desktop/scripts/prepare-seed.ts b/apps/desktop/scripts/prepare-seed.ts
 index 73da078..8d305ed 100644
 --- a/apps/desktop/scripts/prepare-seed.ts
 +++ b/apps/desktop/scripts/prepare-seed.ts
-@@ -52,5 +52,7 @@ function desktopRelease(): DesktopRelease {
+@@ -50,15 +50,18 @@ function manifestVersion(path: string, subject: string): string {
+ 
+ function desktopRelease(): DesktopRelease {
    const version = manifestVersion(join(APP_ROOT, 'package.json'), 'desktop package')
    const dshVersion = manifestVersion(resolve(APP_ROOT, '..', '..', 'package.json'), 'root dsh package')
 -  if (version !== dshVersion) {
@@ -200,7 +212,7 @@ index 73da078..8d305ed 100644
 +  if (product === undefined && version !== dshVersion) {
      throw new Error(`desktop seed: Electron ${version} must bind the same version of @deepseek-ai/dsh, found ${dshVersion}`)
    }
-@@ -58,5 +60,6 @@ function desktopRelease(): DesktopRelease {
+   const runtime = JSON.parse(readFileSync(join(RUNTIME_ROOT, 'versions.json'), 'utf8')) as Record<string, unknown>
    return parseDesktopRelease({
      schemaVersion: 1,
 -    version,
@@ -208,18 +220,26 @@ index 73da078..8d305ed 100644
 +    ...(product === undefined ? {} : { productVersion: version, managedPlugins: product.managedPlugins }),
      hostProtocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
      nodeVersion: runtime.node,
+     pnpmVersion: runtime.pnpm,
+   })
 diff --git a/apps/desktop/src/host-process.ts b/apps/desktop/src/host-process.ts
 index ed18d0c..f65c89f 100644
 --- a/apps/desktop/src/host-process.ts
 +++ b/apps/desktop/src/host-process.ts
-@@ -34,4 +34,6 @@ function isDesktopHostEvent(message: unknown): message is DesktopHostEvent {
+@@ -32,8 +32,10 @@ interface PendingResponse {
+ function isDesktopHostEvent(message: unknown): message is DesktopHostEvent {
+   if (typeof message !== 'object' || message === null || !('type' in message)) return false
    const candidate = message as Record<string, unknown>
    switch (candidate.type) {
 +    case 'restart-prepared':
 +      return Number.isSafeInteger(candidate.requestId) && typeof candidate.idle === 'boolean'
      case 'ready':
        return candidate.protocolVersion === DESKTOP_HOST_PROTOCOL_VERSION && typeof candidate.dshVersion === 'string'
-@@ -68,4 +70,29 @@ export interface DesktopHostReady {
+     case 'fatal':
+       return typeof candidate.message === 'string'
+@@ -66,8 +68,33 @@ export interface DesktopHostReady {
+ }
+ 
  /** One dsh backend running under the bundled upstream Node.js executable. */
  export class DesktopHostProcess {
 +  private restartId = 0
@@ -249,7 +269,11 @@ index ed18d0c..f65c89f 100644
 +  }
    private child: ChildProcess | undefined
    private requestPipe: Writable | undefined
-@@ -388,4 +415,7 @@ export class DesktopHostProcess {
+   private responsePipe: Readable | undefined
+   private readonly responseDecoder = new DesktopHostResponseDecoder()
+@@ -386,8 +413,11 @@ export class DesktopHostProcess {
+   }
+ 
    private handleMessage(message: DesktopHostEvent): void {
      switch (message.type) {
 +      case 'restart-prepared':
@@ -257,17 +281,25 @@ index ed18d0c..f65c89f 100644
 +        return
        case 'ready':
          this.readyResolve(message)
-@@ -400,4 +430,5 @@ export class DesktopHostProcess {
+         return
+       case 'fatal':
+@@ -398,8 +428,9 @@ export class DesktopHostProcess {
+     }
+   }
  
    private fail(error: Error): void {
 +    this.restartReject?.(error)
      this.readyReject(error)
      for (const pending of this.pending.values()) {
+       void pending.requestReader?.cancel(error).catch(() => undefined)
+       if (pending.controller === undefined) pending.reject(error)
 diff --git a/apps/desktop/src/host-protocol.ts b/apps/desktop/src/host-protocol.ts
 index d057d6d..970a2b5 100644
 --- a/apps/desktop/src/host-protocol.ts
 +++ b/apps/desktop/src/host-protocol.ts
-@@ -43,8 +43,15 @@ export interface DesktopHostRequestStart {
+@@ -41,12 +41,19 @@ export interface DesktopHostRequestStart {
+ 
+ /** Commands retained on Node IPC because they do not carry Fetch payload bytes. */
  export type DesktopHostCommand = {
    readonly type: 'shutdown'
 +} | {
@@ -283,11 +315,13 @@ index d057d6d..970a2b5 100644
 +} | {
    readonly type: 'ready'
    readonly protocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
+   readonly dshVersion: string
+ } | {
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..51025da 100644
+index 8bc9fdc..2a03894 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
-@@ -1,15 +1,17 @@
+@@ -1,16 +1,18 @@
  /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
  
 -import { readFile, writeFile } from 'node:fs/promises'
@@ -307,7 +341,9 @@ index 8bc9fdc..51025da 100644
    type IpcMainInvokeEvent,
  } from 'electron'
  import { resolveDesktopPaths } from './paths.ts'
-@@ -19,6 +21,11 @@ import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
+ import { DesktopProjectManager, type DesktopProjectHooks } from './project-manager.ts'
+@@ -18,11 +20,18 @@ import { DesktopHostProcess } from './host-process.ts'
+ import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
  import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
  import { claimDesktopSingleInstance } from './single-instance.ts'
  import { DesktopUpdateCoordinator } from './update-coordinator.ts'
@@ -316,10 +352,17 @@ index 8bc9fdc..51025da 100644
 +import { inspectCredentialStartupFailure, backupInvalidCredentials, credentialRecoveryDialog } from './agentrouter-credential-recovery.mjs'
 +import { installExternalWebNavigation } from './agentrouter-external-navigation.mjs'
 +import { installUpdateExitHandler } from './agentrouter-update-exit.mjs'
++import { verifyRuntimeExecutables, isRuntimeStartupFailure, runtimeRecoveryDialog, repairInstallerUrl, monitorStartupResponsiveness } from './agentrouter-runtime-recovery.mjs'
  
  const SCHEME = 'dsh-app'
  let focusPrimaryWindow = (): void => {}
-@@ -44,6 +51,7 @@ const MIME: Readonly<Record<string, string>> = {
++let stopStartupHeartbeat = (): number => 0
+ 
+ function errorOf(reason: unknown, fallback: string): Error {
+   return reason instanceof Error ? reason : new Error(fallback)
+ }
+@@ -43,8 +52,9 @@ const MIME: Readonly<Record<string, string>> = {
+   '.css': 'text/css; charset=utf-8',
    '.html': 'text/html; charset=utf-8',
    '.js': 'text/javascript; charset=utf-8',
    '.svg': 'image/svg+xml',
@@ -327,7 +370,9 @@ index 8bc9fdc..51025da 100644
  }
  
  interface RuntimeResources {
-@@ -79,8 +87,11 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+   readonly node: string
+@@ -78,10 +88,13 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+   }
    return port
  }
  
@@ -340,7 +385,9 @@ index 8bc9fdc..51025da 100644
      width: 1280,
      height: 840,
      minWidth: 880,
-@@ -94,9 +105,18 @@ function createWindow(preload: string): BrowserWindow {
+     minHeight: 600,
+@@ -93,11 +106,20 @@ function createWindow(preload: string): BrowserWindow {
+       sandbox: true,
        webSecurity: true,
      },
    })
@@ -362,15 +409,20 @@ index 8bc9fdc..51025da 100644
    })
    return window
  }
-@@ -131,6 +151,7 @@ async function serveShellAsset(request: Request): Promise<Response> {
+ 
+@@ -130,8 +152,10 @@ async function serveShellAsset(request: Request): Promise<Response> {
+   }
  }
  
  async function main(): Promise<void> {
 +  const started = Date.now()
++  stopStartupHeartbeat = monitorStartupResponsiveness()
    const resources = runtimeResources()
    const paths = resolveDesktopPaths()
    const development = developmentProject()
-@@ -147,9 +168,75 @@ async function main(): Promise<void> {
+   const activeProject = development ?? paths.profile
+@@ -146,20 +170,87 @@ async function main(): Promise<void> {
+   const locale = resolveDesktopLocale(app.getLocale())
    const messages = locale.messages
    const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
    const managementPreload = fileURLToPath(new URL('./preload.cjs', import.meta.url))
@@ -446,7 +498,8 @@ index 8bc9fdc..51025da 100644
      for (const window of BrowserWindow.getAllWindows()) {
        window.webContents.send(DESKTOP_IPC.updatesState, state)
      }
-@@ -158,7 +245,8 @@ async function main(): Promise<void> {
+     return state
+   }
  
    const startHost = async (projectDir = activeProject): Promise<DesktopHostProcess> => {
      const next = new DesktopHostProcess(resources.node, projectDir, hostInspectPort)
@@ -456,9 +509,13 @@ index 8bc9fdc..51025da 100644
      return next
    }
    const hooks: DesktopProjectHooks = {
-@@ -204,16 +292,21 @@ async function main(): Promise<void> {
+     healthCheck: async (projectDir) => {
+@@ -202,35 +293,41 @@ async function main(): Promise<void> {
+     },
+   }
  
    if (development === undefined) {
++    await verifyRuntimeExecutables(resources)
      await manager.applyRelease(resources.seed, app.getVersion(), {
 +      progress,
        ...hooks,
@@ -478,7 +535,7 @@ index 8bc9fdc..51025da 100644
        shellInstallerOwnsQuit = true
        const active = host
        host = undefined
-@@ -221,15 +314,15 @@ async function main(): Promise<void> {
+       await active?.stop()
      },
    )
  
@@ -501,7 +558,9 @@ index 8bc9fdc..51025da 100644
    const mutate = async (event: IpcMainInvokeEvent, mutation: Parameters<DesktopProjectManager['mutate']>[0]): Promise<void> => {
      assertDesktopSender(event, ['shell'])
      if (development !== undefined) {
-@@ -272,6 +365,7 @@ async function main(): Promise<void> {
+       throw new Error('dsh desktop: plugin package changes require a packaged application')
+@@ -271,8 +368,9 @@ async function main(): Promise<void> {
+   })
  
    const checkAndPrompt = async (manual: boolean): Promise<void> => {
      const state = await updates.check()
@@ -509,7 +568,9 @@ index 8bc9fdc..51025da 100644
      if (state.phase === 'error') {
        if (manual) {
          await dialog.showMessageBox({
-@@ -282,7 +376,7 @@ async function main(): Promise<void> {
+           type: 'error',
+@@ -281,9 +379,9 @@ async function main(): Promise<void> {
+         })
        }
        return
      }
@@ -518,7 +579,9 @@ index 8bc9fdc..51025da 100644
        if (manual) {
          await dialog.showMessageBox({
            type: 'info',
-@@ -317,9 +411,8 @@ async function main(): Promise<void> {
+           title: messages.updateCheckTitle,
+@@ -316,11 +414,10 @@ async function main(): Promise<void> {
+     if (pluginWindow !== undefined && !pluginWindow.isDestroyed()) {
        pluginWindow.focus()
        return
      }
@@ -529,7 +592,9 @@ index 8bc9fdc..51025da 100644
      pluginWindow.once('ready-to-show', () => { pluginWindow?.show() })
      pluginWindow.once('closed', () => { pluginWindow = undefined })
      void pluginWindow.loadURL(`${SCHEME}://shell/plugin-manager.html`)
-@@ -334,36 +427,21 @@ async function main(): Promise<void> {
+   }
+@@ -333,38 +430,24 @@ async function main(): Promise<void> {
+         accelerator: 'CmdOrCtrl+,',
          enabled: development === undefined,
          click: openPluginWindow,
        },
@@ -568,11 +633,14 @@ index 8bc9fdc..51025da 100644
 +  events.push({ stage: 'ready', elapsedMs: Date.now() - started })
 +  await writeFile(join(paths.root, 'startup.json'), JSON.stringify({ schemaVersion: 1,
 +    productVersion: app.getVersion(), startedAt: new Date(started).toISOString(), visibleMs, events,
-+    ready: true, durationMs: Date.now() - started, rebuilt: events.some(event => event.stage === 'installing') }))
++    ready: true, durationMs: Date.now() - started, maxMainThreadDelayMs: stopStartupHeartbeat(),
++    rebuilt: events.some(event => event.stage === 'installing') }))
    publishUpdate(updateState)
    setTimeout(() => { void checkAndPrompt(false) }, 10_000)
  
-@@ -373,18 +451,13 @@ async function main(): Promise<void> {
+   app.on('activate', () => {
+@@ -372,26 +455,67 @@ async function main(): Promise<void> {
+   })
    app.on('window-all-closed', () => {
      if (process.platform !== 'darwin') app.quit()
    })
@@ -592,9 +660,10 @@ index 8bc9fdc..51025da 100644
 +if (ownsDesktopInstance) installUpdateExitHandler({ app, autoUpdater: nativeAutoUpdater, BrowserWindow })
 +
  if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unknown) => {
++  stopStartupHeartbeat()
    const message = error instanceof Error ? error.message : String(error)
    console.error(error)
-@@ -392,6 +465,47 @@ if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unk
+   const diagnosticFile = process.env.DSH_DESKTOP_DIAGNOSTIC_FILE
    if (diagnosticFile !== undefined) {
      await writeFile(diagnosticFile, `${error instanceof Error ? error.stack ?? message : message}\n`).catch(() => undefined)
    }
@@ -603,7 +672,11 @@ index 8bc9fdc..51025da 100644
 +  const credentialHome = dirname(resolveDesktopPaths().root)
 +  const invalidCredentials = await inspectCredentialStartupFailure(error, credentialHome)
 +  let checkUpdates = false
-+  if (invalidCredentials) {
++  if (isRuntimeStartupFailure(error)) {
++    const recovery = await dialog.showMessageBox(runtimeRecoveryDialog(app.getLocale().startsWith('zh')))
++    if (recovery.response === 1) await shell.openExternal(repairInstallerUrl(app.getVersion()))
++    checkUpdates = recovery.response === 0
++  } else if (invalidCredentials) {
 +    const chinese = app.getLocale().startsWith('zh')
 +    const recovery = await dialog.showMessageBox(credentialRecoveryDialog(invalidCredentials, chinese))
 +    if (recovery.response === 0) {
@@ -644,35 +717,58 @@ index 8bc9fdc..51025da 100644
    app.exit(1)
  })
 diff --git a/apps/desktop/src/project-manager.ts b/apps/desktop/src/project-manager.ts
-index b9b94f7..067f03b 100644
+index b9b94f7..0e89077 100644
 --- a/apps/desktop/src/project-manager.ts
 +++ b/apps/desktop/src/project-manager.ts
-@@ -23,4 +23,6 @@ import {
+@@ -15,14 +15,16 @@ import {
+   closeSync,
+   readdirSync,
+   readFileSync,
+   renameSync,
+-  rmSync,
+   unlinkSync,
+   writeFileSync,
+   writeSync,
  } from 'node:fs'
++import { rm } from 'node:fs/promises'
  import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 +import { load as loadYaml, YAMLException } from 'js-yaml'
 +import { valid } from 'semver'
  import {
    DESKTOP_PACKAGES_DIR,
-@@ -42,4 +44,5 @@ const DESKTOP_PROJECT_FILES = [
+   DESKTOP_PACKAGE_SET_FILE,
+   DESKTOP_HOST_PACKAGE,
+@@ -40,15 +42,17 @@ const DESKTOP_PROJECT_FILES = [
+   'package.json',
+   'pnpm-lock.yaml',
    'pnpm-workspace.yaml',
    'desktop-release.json',
 +  'cordis.patch.yml',
    DESKTOP_PACKAGE_SET_FILE,
  ] as const
-@@ -49,4 +52,5 @@ export interface DesktopPluginRecord {
+ 
+ /** Desktop plugin record derived from the installed profile. */
+ export interface DesktopPluginRecord {
    readonly name: string
    readonly version: string
 +  readonly updateOwner?: 'product'
  }
  
-@@ -80,4 +84,5 @@ export interface DesktopRuntimeExecutables {
+ /** Installed desktop project manifest slice. */
+ interface DesktopProjectManifest {
+@@ -78,8 +82,9 @@ export interface DesktopRuntimeExecutables {
+ }
+ 
  /** Hooks that bind project replacement to backend lifecycle and health. */
  export interface DesktopProjectHooks {
 +  progress?(stage: 'checking' | 'preparing' | 'installing' | 'validating' | 'reusing'): Promise<void>
    /** Prove the staged dependency graph while the active backend is stopped. */
    healthCheck(projectDir: string): Promise<void>
-@@ -110,4 +115,15 @@ const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
+   /** Stop the active backend and await process exit before directory moves. */
+   beforeActivate(): Promise<void>
+@@ -108,8 +113,19 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|
+ const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
+ const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
  const DESKTOP_REGISTRY = 'https://registry.npmjs.org/'
  
 +class PnpmCommandError extends Error {
@@ -688,14 +784,21 @@ index b9b94f7..067f03b 100644
 +
  function errorOf(reason: unknown, fallback: string): Error {
    return reason instanceof Error ? reason : new Error(fallback)
-@@ -122,5 +138,5 @@ function readJson(path: string): unknown {
+ }
+ 
+@@ -120,18 +136,19 @@ function writeJson(path: string, value: unknown): void {
+ function readJson(path: string): unknown {
+   return JSON.parse(readFileSync(path, 'utf8'))
  }
  
 -function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string {
 +function workspaceFile(overrides: Readonly<Record<string, string>> = {}, managed: DesktopRelease['managedPlugins'] = []): string {
    const entries = Object.entries(overrides).sort(([left], [right]) => left.localeCompare(right))
    const overrideSection = entries.length === 0
-@@ -131,5 +147,6 @@ function workspaceFile(overrides: Readonly<Record<string, string>> = {}): string
+     ? ''
+     : `overrides:\n${entries.map(([name, spec]) => `  ${JSON.stringify(name)}: ${JSON.stringify(spec)}`).join('\n')}\n`
+   const coreBuildSpec = overrides[CORE_BUILD_PACKAGE]
+   const coreBuildKey = coreBuildSpec === undefined
      ? CORE_BUILD_PACKAGE
      : `${CORE_BUILD_PACKAGE}@${coreBuildSpec.replace('file:./', 'file:')}`
 -  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}allowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
@@ -703,14 +806,42 @@ index b9b94f7..067f03b 100644
 +  return `packages:\n  - .\n\n${overrideSection}${WORKSPACE_SETTINGS}${approved}allowBuilds:\n  node-pty: true\n  koffi: true\n  fs-ext: true\n  ${JSON.stringify(coreBuildKey)}: true\n  '@google/genai': false\n  protobufjs: false\n  node-addon-require-builtin: false\n`
  }
  
-@@ -266,5 +283,5 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
+ function releaseFile(projectDir: string): DesktopRelease {
+   return parseDesktopRelease(readJson(join(projectDir, 'desktop-release.json')))
+@@ -178,17 +195,17 @@ export function packageNameFromSpec(spec: string): string | undefined {
+   if (versionAt !== -1) assertVersion(spec.slice(versionAt + 1))
+   return name
+ }
+ 
+-function removeOwnedDirectory(path: string): void {
++async function removeOwnedDirectory(path: string): Promise<void> {
+   if (!existsSync(path)) return
+   const stat = lstatSync(path)
+   if (stat.isSymbolicLink()) {
+     unlinkSync(path)
+     return
+   }
+   if (!stat.isDirectory()) throw new Error(`desktop project: owned directory path is not a directory: ${path}`)
+-  rmSync(path, { recursive: true })
++  await rm(path, { recursive: true, maxRetries: 3, retryDelay: 100 })
+ }
+ 
+ function copyMetadata(source: string, target: string): void {
+   mkdirSync(target, { recursive: true, mode: 0o700 })
+@@ -264,9 +281,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
+   const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
+   const expectedOverrides = desktopCorePackageOverrides(packageSet)
    if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
      || Object.entries(expectedOverrides).some(([name, spec]) => manifest.dependencies[name] !== spec)
 -    || readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8') !== workspaceFile(expectedOverrides)) {
 +    || readFileSync(join(projectDir, 'pnpm-workspace.yaml'), 'utf8') !== workspaceFile(expectedOverrides, releaseFile(projectDir).managedPlugins)) {
      throw new Error(`desktop project: core package mapping does not match ${DESKTOP_PACKAGE_SET_FILE}`)
    }
-@@ -286,5 +303,83 @@ function profilePluginNames(projectDir: string): readonly string[] {
+   return manifest
+ }
+@@ -284,9 +301,87 @@ function profilePluginNames(projectDir: string): readonly string[] {
+   return plugins
+ }
  
  function pluginRecords(projectDir: string): readonly DesktopPluginRecord[] {
 -  return profilePluginNames(projectDir).map(name => inspectPlugin(projectDir, name))
@@ -795,7 +926,33 @@ index b9b94f7..067f03b 100644
 +  }), bundles }
  }
  
-@@ -388,5 +483,6 @@ export class DesktopProjectManager {
+ function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
+   const manifest = projectManifest(projectDir)
+@@ -338,9 +433,9 @@ export class DesktopProjectManager {
+     readonly runtime: DesktopRuntimeExecutables,
+   ) {}
+ 
+   /** Recover an interrupted directory replacement before reading the active project. */
+-  recover(): void {
++  async recover(): Promise<void> {
+     if (!existsSync(this.paths.pending)) return
+     const value = readJson(this.paths.pending)
+     if (!isRecord(value) || value.schemaVersion !== 1
+       || typeof value.id !== 'string' || typeof value.stagingProfile !== 'string'
+@@ -357,9 +452,9 @@ export class DesktopProjectManager {
+     if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
+       mkdirSync(dirname(this.paths.profile), { recursive: true })
+       renameSync(this.paths.rollback, this.paths.profile)
+     }
+-    removeOwnedDirectory(pending.stagingProfile)
++    await removeOwnedDirectory(pending.stagingProfile)
+     unlinkSync(this.paths.pending)
+   }
+ 
+   /** Read the active desktop plugin inventory. */
+@@ -386,71 +481,162 @@ export class DesktopProjectManager {
+ 
+   /** Read the release version applied to the active desktop project. */
    releaseVersion(): string {
      if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
 -    return releaseFile(this.paths.profile).version
@@ -803,9 +960,11 @@ index b9b94f7..067f03b 100644
 +    return release.productVersion ?? release.version
    }
  
-@@ -395,31 +491,112 @@ export class DesktopProjectManager {
+   /** Install or reconcile the active project to the Electron package's exact release. */
+   async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
      return this.withLock(async () => {
-       this.recover()
+-      this.recover()
++      await this.recover()
 +      await hooks.progress?.('checking')
        verifySeedIntegrity(seedDir)
        const target = releaseFile(seedDir)
@@ -829,6 +988,7 @@ index b9b94f7..067f03b 100644
 +        // Compare the actual link owner, not a pnpm version allowlist.
 +        if (await this.usesBundledStore()) return false
        }
+-      this.mergeSeedPnpmState(seedDir)
 +      // A shell-only update must not reinstall an identical verified runtime.
 +      // Older releases without a fingerprint take the migration path once.
 +      if (!currentRelease && previousRelease?.runtimeFingerprint !== undefined
@@ -854,7 +1014,7 @@ index b9b94f7..067f03b 100644
 +        }
 +      }
 +      await hooks.progress?.('preparing')
-       this.mergeSeedPnpmState(seedDir)
++      await this.mergeSeedPnpmState(seedDir)
 +      await hooks.progress?.('installing')
        const stagingProfile = this.newStagingProfile()
        try {
@@ -927,14 +1087,26 @@ index b9b94f7..067f03b 100644
 +            })
            }
          } else {
-@@ -427,4 +604,5 @@ export class DesktopProjectManager {
+           copyMetadata(seedDir, stagingProfile)
            await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
          }
 +        await hooks.progress?.('validating')
          await hooks.healthCheck(stagingProfile)
          await this.activate(stagingProfile, hooks)
-@@ -442,8 +620,16 @@ export class DesktopProjectManager {
-       this.recover()
+         return true
+       } catch (error) {
+-        removeOwnedDirectory(stagingProfile)
++        await removeOwnedDirectory(stagingProfile)
+         throw error
+       }
+     })
+   }
+ 
+   /** Apply one exact dependency mutation through a staging project. */
+   async mutate(mutation: DesktopProjectMutation, hooks: DesktopProjectHooks): Promise<void> {
+     await this.withLock(async () => {
+-      this.recover()
++      await this.recover()
        if (!existsSync(this.paths.profile)) throw new Error('desktop project: active profile is not installed')
 -      verifyDesktopCorePackageSet(this.paths.profile, this.releaseVersion())
 +      verifyDesktopCorePackageSet(this.paths.profile, releaseFile(this.paths.profile).version)
@@ -951,7 +1123,17 @@ index b9b94f7..067f03b 100644
 +        await this.prepareFromCache(stagingProfile, ['install', '--frozen-lockfile', '--trust-lockfile'])
          await this.applyMutation(stagingProfile, mutation)
          await hooks.healthCheck(stagingProfile)
-@@ -462,4 +648,42 @@ export class DesktopProjectManager {
+         await this.activate(stagingProfile, hooks)
+       } catch (error) {
+-        removeOwnedDirectory(stagingProfile)
++        await removeOwnedDirectory(stagingProfile)
+         throw error
+       }
+     })
+   }
+@@ -460,14 +646,52 @@ export class DesktopProjectManager {
+     mkdirSync(path, { recursive: true, mode: 0o700 })
+     return path
    }
  
 +  private async usesBundledStore(): Promise<boolean> {
@@ -994,30 +1176,43 @@ index b9b94f7..067f03b 100644
 +
    private async applyMutation(projectDir: string, mutation: DesktopProjectMutation): Promise<void> {
      switch (mutation.type) {
-@@ -467,5 +691,5 @@ export class DesktopProjectManager {
+       case 'plugin-add': {
          const requestedName = packageNameFromSpec(mutation.spec)
          if (requestedName === undefined) throw new Error('desktop project: plugin package name is required')
 -        await this.runPnpm(projectDir, ['add', mutation.spec, '--save-exact'])
 +        await this.resolveMutation(projectDir, ['add', mutation.spec, '--save-exact'])
          const installed = inspectPlugin(projectDir, requestedName)
          const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
-@@ -482,5 +706,5 @@ export class DesktopProjectManager {
+         writeProfilePlugins(
+           projectDir,
+@@ -480,9 +704,9 @@ export class DesktopProjectManager {
+         if (!profilePluginNames(projectDir).includes(mutation.name)) {
+           throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
          const remaining = pluginRecords(projectDir).filter(plugin => plugin.name !== mutation.name)
 -        await this.runPnpm(projectDir, ['remove', mutation.name])
 +        await this.resolveMutation(projectDir, ['remove', mutation.name])
          writeProfilePlugins(projectDir, remaining)
          return
-@@ -492,5 +716,5 @@ export class DesktopProjectManager {
+       }
+       case 'plugin-update':
+@@ -490,9 +714,9 @@ export class DesktopProjectManager {
+         assertVersion(mutation.version)
+         if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
 -        await this.runPnpm(projectDir, ['add', `${mutation.name}@${mutation.version}`, '--save-exact'])
 +        await this.resolveMutation(projectDir, ['add', `${mutation.name}@${mutation.version}`, '--save-exact'])
          {
            const installed = inspectPlugin(projectDir, mutation.name)
-@@ -506,4 +730,12 @@ export class DesktopProjectManager {
+           writeProfilePlugins(
+             projectDir,
+@@ -504,16 +728,24 @@ export class DesktopProjectManager {
+         mutation satisfies never
+     }
    }
  
+-  private mergeSeedPnpmState(seedDir: string): void {
 +  private async resolveMutation(projectDir: string, args: readonly string[]): Promise<void> {
 +    // pnpm 11 can leave workers alive after a hoisted incremental add/remove on
 +    // the full Desktop graph. Separate resolution and frozen materialization
@@ -1026,15 +1221,37 @@ index b9b94f7..067f03b 100644
 +    await this.prepareFromCache(projectDir, ['install', '--frozen-lockfile', '--trust-lockfile'])
 +  }
 +
-   private mergeSeedPnpmState(seedDir: string): void {
++  private async mergeSeedPnpmState(seedDir: string): Promise<void> {
      const transactionRoot = join(this.paths.staging, randomUUID())
-@@ -527,4 +759,5 @@ export class DesktopProjectManager {
+     const extractedStore = join(transactionRoot, 'store')
+     try {
+-      extractPnpmStoreArchives(seedDir, extractedStore)
+-      mergePnpmStore(extractedStore, this.paths.pnpm.store)
++      await extractPnpmStoreArchives(seedDir, extractedStore)
++      await mergePnpmStore(extractedStore, this.paths.pnpm.store)
+     } finally {
+-      removeOwnedDirectory(transactionRoot)
++      await removeOwnedDirectory(transactionRoot)
+     }
+   }
+ 
+   private async activate(stagingProfile: string, hooks: DesktopProjectHooks): Promise<void> {
+@@ -525,10 +757,11 @@ export class DesktopProjectManager {
+     }
+     writeJson(this.paths.pending, pending)
      await hooks.beforeActivate()
      let activeMoved = false
 +    let stagingActivated = false
      try {
-       removeOwnedDirectory(this.paths.rollback)
-@@ -538,8 +771,9 @@ export class DesktopProjectManager {
+-      removeOwnedDirectory(this.paths.rollback)
++      await removeOwnedDirectory(this.paths.rollback)
+       mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
+       writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
+       if (existsSync(this.paths.profile)) {
+         renameSync(this.paths.profile, this.paths.rollback)
+@@ -536,20 +769,21 @@ export class DesktopProjectManager {
+       }
+       mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
        writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
        renameSync(stagingProfile, this.paths.profile)
 +      stagingActivated = true
@@ -1042,24 +1259,34 @@ index b9b94f7..067f03b 100644
        unlinkSync(this.paths.pending)
      } catch (error) {
 -      if (existsSync(this.paths.profile)) removeOwnedDirectory(this.paths.profile)
-+      if (stagingActivated && existsSync(this.paths.profile)) removeOwnedDirectory(this.paths.profile)
++      if (stagingActivated && existsSync(this.paths.profile)) await removeOwnedDirectory(this.paths.profile)
        if (activeMoved && existsSync(this.paths.rollback)) renameSync(this.paths.rollback, this.paths.profile)
        if (existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
-@@ -549,5 +783,5 @@ export class DesktopProjectManager {
+       await hooks.afterActivate().catch(() => undefined)
+       throw error
+     }
    }
  
 -  private async runPnpm(projectDir: string, args: readonly string[]): Promise<void> {
 +  private async runPnpm(projectDir: string, args: readonly string[]): Promise<string> {
      const [command, ...commandArgs] = args
      if (command === undefined) throw new Error('desktop project: pnpm command is required')
-@@ -561,5 +795,5 @@ export class DesktopProjectManager {
+     for (const path of [this.paths.root, this.paths.pnpm.store, this.paths.pnpm.cache,
+       this.paths.pnpm.state, this.paths.pnpm.config, this.paths.pnpm.home]) {
+@@ -559,9 +793,9 @@ export class DesktopProjectManager {
+     if (!existsSync(npmrc)) writeFileSync(npmrc, '', { mode: 0o600 })
+     const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
        !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
      )))
 -    await new Promise<void>((settle, reject) => {
 +    return new Promise<string>((settle, reject) => {
        const child = spawn(this.runtime.node, [
          this.runtime.pnpm,
-@@ -572,6 +806,10 @@ export class DesktopProjectManager {
+         `--config.registry=${DESKTOP_REGISTRY}`,
+         `--config.store-dir=${this.paths.pnpm.store}`,
+@@ -570,10 +804,14 @@ export class DesktopProjectManager {
+         command,
+         ...commandArgs,
        ], {
          cwd: projectDir,
 +        windowsHide: true,
@@ -1070,19 +1297,28 @@ index b9b94f7..067f03b 100644
 +          CI: 'true',
            COREPACK_HOME: this.paths.pnpm.home,
            NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
-@@ -600,4 +838,5 @@ export class DesktopProjectManager {
+           NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
+           NPM_CONFIG_USERCONFIG: npmrc,
+@@ -598,14 +836,16 @@ export class DesktopProjectManager {
+         reject(errorOf(error, 'desktop project: failed to assign the package transaction lock to pnpm'))
+         return
        }
        let diagnostics = ''
 +      let stdout = ''
        let completed = false
        const appendDiagnostics = (chunk: string): void => {
-@@ -606,4 +845,5 @@ export class DesktopProjectManager {
+         diagnostics = (diagnostics + chunk).slice(-MAX_PNPM_DIAGNOSTIC_BYTES)
+       }
        child.stdout.setEncoding('utf8')
        child.stdout.on('data', appendDiagnostics)
 +      child.stdout.on('data', (chunk: string) => { stdout = (stdout + chunk).slice(-MAX_PNPM_DIAGNOSTIC_BYTES) })
        child.stderr.setEncoding('utf8')
        child.stderr.on('data', appendDiagnostics)
-@@ -623,10 +863,8 @@ export class DesktopProjectManager {
+       const complete = (settleChild: () => void): void => {
+         if (completed) return
+@@ -621,14 +861,12 @@ export class DesktopProjectManager {
+       child.once('error', (error) => { complete(() => { reject(error) }) })
+       child.once('close', (code, signal) => {
          complete(() => {
            if (code === 0) {
 -            settle()
@@ -1095,7 +1331,11 @@ index b9b94f7..067f03b 100644
 +          reject(new PnpmCommandError(String(code ?? signal), diagnostics))
          })
        })
-@@ -691,11 +929,12 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
+     })
+   }
+@@ -689,15 +927,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
+   const manifest: DesktopProjectManifest = {
+     name: PROJECT_NAME,
      private: true,
      version: '0.0.0',
 -    dependencies: desktopCorePackageOverrides(packageSet),
@@ -1111,11 +1351,15 @@ index b9b94f7..067f03b 100644
 +    workspaceFile(desktopCorePackageOverrides(packageSet), release.managedPlugins),
      { mode: 0o600 },
    )
+   writeJson(join(seedDir, 'desktop-release.json'), release)
+ }
 diff --git a/apps/desktop/src/release.ts b/apps/desktop/src/release.ts
 index f78d922..b9a1e7e 100644
 --- a/apps/desktop/src/release.ts
 +++ b/apps/desktop/src/release.ts
-@@ -7,6 +7,10 @@ import { DESKTOP_HOST_PROTOCOL_VERSION } from './host-protocol.ts'
+@@ -5,10 +5,14 @@ import { DESKTOP_HOST_PROTOCOL_VERSION } from './host-protocol.ts'
+ 
+ /** Release facts embedded in the seed and copied into the active desktop project. */
  export interface DesktopRelease {
    readonly schemaVersion: 1
 -  /** Exact version used by both Electron and `@deepseek-ai/dsh`. */
@@ -1127,7 +1371,11 @@ index f78d922..b9a1e7e 100644
 +  readonly managedPlugins?: readonly { readonly name: string; readonly version: string }[]
    readonly hostProtocolVersion: typeof DESKTOP_HOST_PROTOCOL_VERSION
    readonly nodeVersion: string
-@@ -26,7 +30,22 @@ export function parseDesktopRelease(value: unknown): DesktopRelease {
+   readonly pnpmVersion: string
+ }
+@@ -24,11 +28,26 @@ export function parseDesktopRelease(value: unknown): DesktopRelease {
+     || typeof value.nodeVersion !== 'string' || valid(value.nodeVersion) === null
+     || typeof value.pnpmVersion !== 'string' || valid(value.pnpmVersion) === null) {
      throw new Error('dsh desktop: invalid desktop release metadata')
    }
 +  if (value.productVersion !== undefined && (typeof value.productVersion !== 'string' || valid(value.productVersion) === null)) {
@@ -1150,31 +1398,75 @@ index f78d922..b9a1e7e 100644
 +    ...(value.runtimeFingerprint === undefined ? {} : { runtimeFingerprint: value.runtimeFingerprint as string }),
      hostProtocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
      nodeVersion: value.nodeVersion,
+     pnpmVersion: value.pnpmVersion,
+   }
 diff --git a/apps/desktop/src/seed-store.ts b/apps/desktop/src/seed-store.ts
-index e4b4759..eb9dce4 100644
+index e4b4759..bce8158 100644
 --- a/apps/desktop/src/seed-store.ts
 +++ b/apps/desktop/src/seed-store.ts
-@@ -11,4 +11,5 @@ import {
+@@ -3,16 +3,17 @@
+ import { createHash } from 'node:crypto'
+ import {
+   chmodSync,
+   copyFileSync,
+-  cpSync,
+   existsSync,
+   mkdirSync,
+   readdirSync,
    readFileSync,
    rmSync,
 +  statSync,
    writeFileSync,
  } from 'node:fs'
-@@ -24,5 +25,5 @@ export const SEED_STORE_ARCHIVE_MANIFEST = 'store-archives.json'
++import { cp } from 'node:fs/promises'
+ import { join, relative, sep } from 'node:path'
+ import { DatabaseSync } from 'node:sqlite'
+ import { create, extract, list } from 'tar'
+ 
+@@ -22,9 +23,9 @@ export const SEED_STORE_ARCHIVE_DIR = 'store-archives'
+ /** Manifest describing the deterministic pnpm store archive set. */
+ export const SEED_STORE_ARCHIVE_MANIFEST = 'store-archives.json'
  
  const DEFAULT_SHARD_COUNT = 16
 -const ARCHIVE_NAME_PATTERN = /^store-[0-9a-f]{2}\.tar$/u
 +const ARCHIVE_NAME_PATTERN = /^store-(?:[0-9a-f]{2}|[0-9a-f]{64})\.tar$/u
  const STORE_VERSION_PATTERN = /^v\d+$/u
  
-@@ -87,5 +88,5 @@ function readArchiveManifest(seedRoot: string): SeedStoreArchiveManifest {
+ interface SeedStoreArchiveRecord {
+   readonly file: string
+@@ -85,9 +86,9 @@ function readArchiveManifest(seedRoot: string): SeedStoreArchiveManifest {
+       || names.has(record.file) || !Number.isSafeInteger(record.entries) || (record.entries as number) < 1) {
+       throw new Error(`desktop seed: invalid pnpm store archive record in ${path}`)
      }
      const shard = Number.parseInt(record.file.slice('store-'.length, -'.tar'.length), 16)
 -    if (shard >= (candidate.shardCount as number)) {
 +    if (record.file.length === 'store-00.tar'.length && shard >= (candidate.shardCount as number)) {
        throw new Error(`desktop seed: pnpm store archive shard is outside the manifest range in ${path}`)
      }
-@@ -186,17 +187,21 @@ export function archivePnpmStore(
+     names.add(record.file)
+     return { file: record.file, entries: record.entries as number }
+@@ -147,16 +148,16 @@ function mergeStoreIndex(source: string, destination: string): void {
+  * Merge a completely extracted seed store into Desktop's persistent pnpm store.
+  * @param source - Verified temporary store extraction.
+  * @param destination - Desktop-owned persistent pnpm store.
+  */
+-export function mergePnpmStore(source: string, destination: string): void {
++export async function mergePnpmStore(source: string, destination: string): Promise<void> {
+   mkdirSync(destination, { recursive: true, mode: 0o700 })
+   const indexPaths = readdirSync(source, { withFileTypes: true })
+     .filter(entry => entry.isDirectory() && STORE_VERSION_PATTERN.test(entry.name)
+       && existsSync(join(source, entry.name, 'index.db')))
+     .map(entry => `${entry.name}/index.db`)
+   const indexes = new Set(indexPaths)
+-  cpSync(source, destination, {
++  await cp(source, destination, {
+     recursive: true,
+     force: true,
+     filter: path => !indexes.has(relative(source, path).split(sep).join('/')),
+   })
+@@ -184,21 +185,25 @@ export function archivePnpmStore(
+   rmSync(archiveRoot, { recursive: true, force: true })
+   rmSync(manifestPath, { force: true })
    mkdirSync(archiveRoot, { recursive: true })
    const shards = Array.from({ length: shardCount }, (): string[] => [])
 -  for (const path of storeFiles(storeRoot)) (shards[shardFor(path, shardCount)] as string[]).push(path)
@@ -1208,21 +1500,89 @@ index e4b4759..eb9dce4 100644
 +      noMtime: true, portable: true, sync: true }, paths)
      chmodSync(join(archiveRoot, file), 0o644)
      archives.push({ file, entries: paths.length })
-@@ -241,5 +246,8 @@ export function extractPnpmStoreArchives(seedRoot: string, destination: string):
-         }
-         assertArchivePath(entry.path)
+   }
+   if (archives.length === 0) throw new Error('desktop seed: pnpm store is empty')
+@@ -210,9 +215,9 @@ export function archivePnpmStore(
+  * Validate and extract a packaged pnpm store archive set into an empty directory.
+  * @param seedRoot - verified packaged seed directory.
+  * @param destination - empty Desktop-owned temporary extraction directory.
+  */
+-export function extractPnpmStoreArchives(seedRoot: string, destination: string): void {
++export async function extractPnpmStoreArchives(seedRoot: string, destination: string): Promise<void> {
+   const manifest = readArchiveManifest(seedRoot)
+   const archiveRoot = join(seedRoot, SEED_STORE_ARCHIVE_DIR)
+   const actualFiles = readdirSync(archiveRoot, { withFileTypes: true }).map((entry) => {
+     if (!entry.isFile() || entry.isSymbolicLink()) {
+@@ -232,40 +237,49 @@ export function extractPnpmStoreArchives(seedRoot: string, destination: string):
+   for (const archive of manifest.archives) {
+     const archivePath = join(archiveRoot, archive.file)
+     const archiveShard = Number.parseInt(archive.file.slice('store-'.length, -'.tar'.length), 16)
+     let entries = 0
+-    list({
++    let invalidEntry: Error | undefined
++    await list({
+       file: archivePath,
+       onReadEntry: (entry) => {
+-        if (entry.type !== 'File' && entry.type !== 'OldFile') {
+-          throw new Error(`desktop seed: unsupported pnpm store archive entry type ${entry.type}`)
+-        }
+-        assertArchivePath(entry.path)
 -        if (shardFor(entry.path, manifest.shardCount) !== archiveShard) {
-+        const matches = archive.file.length === 'store-00.tar'.length
-+          ? shardFor(entry.path, manifest.shardCount) === archiveShard
-+          : archive.file === 'store-' + createHash('sha256').update(entry.path).digest('hex') + '.tar'
-+        if (!matches) {
-           throw new Error(`desktop seed: pnpm store path is assigned to the wrong archive shard: ${entry.path}`)
+-          throw new Error(`desktop seed: pnpm store path is assigned to the wrong archive shard: ${entry.path}`)
+-        }
+-        if (paths.has(entry.path)) {
+-          throw new Error(`desktop seed: duplicate pnpm store archive path ${entry.path}`)
++        // Read callbacks run asynchronously. Retain validation failures and
++        // reject before extraction, rather than throwing out of an I/O callback.
++        try {
++          if (entry.type !== 'File' && entry.type !== 'OldFile') {
++            throw new Error(`desktop seed: unsupported pnpm store archive entry type ${entry.type}`)
++          }
++          assertArchivePath(entry.path)
++          const matches = archive.file.length === 'store-00.tar'.length
++            ? shardFor(entry.path, manifest.shardCount) === archiveShard
++            : archive.file === 'store-' + createHash('sha256').update(entry.path).digest('hex') + '.tar'
++          if (!matches) {
++            throw new Error(`desktop seed: pnpm store path is assigned to the wrong archive shard: ${entry.path}`)
++          }
++          if (paths.has(entry.path)) {
++            throw new Error(`desktop seed: duplicate pnpm store archive path ${entry.path}`)
++          }
++          paths.add(entry.path)
++          entries += 1
++        } catch (error) {
++          invalidEntry ??= error instanceof Error ? error : new Error(String(error))
          }
+-        paths.add(entry.path)
+-        entries += 1
+       },
+       strict: true,
+-      sync: true,
+     })
++    if (invalidEntry) throw invalidEntry
+     if (entries !== archive.entries) {
+       throw new Error(`desktop seed: pnpm store archive ${archive.file} has an unexpected entry count`)
+     }
+   }
+   for (const archive of manifest.archives) {
+-    extract({
++    await extract({
+       chmod: true,
+       cwd: destination,
+       file: join(archiveRoot, archive.file),
+       noMtime: true,
+       preservePaths: false,
+       processUmask: 0,
+       strict: true,
+-      sync: true,
+     })
+   }
+ }
 diff --git a/apps/desktop/src/update-coordinator.ts b/apps/desktop/src/update-coordinator.ts
 index c31dcc3..706bf03 100644
 --- a/apps/desktop/src/update-coordinator.ts
 +++ b/apps/desktop/src/update-coordinator.ts
-@@ -1,24 +1,34 @@
+@@ -1,25 +1,35 @@
  /** One Electron release stream for the version-bound shell and dsh seed. */
 -
 -import { existsSync } from 'node:fs'
@@ -1266,7 +1626,9 @@ index c31dcc3..706bf03 100644
    constructor(
      private readonly publish: (state: DesktopUpdateState) => DesktopUpdateState,
      private readonly beforeRestart: () => Promise<void> = async () => {},
-@@ -29,67 +39,159 @@ export class DesktopUpdateCoordinator {
+     private readonly updater: AppUpdater = autoUpdater,
+@@ -28,68 +38,160 @@ export class DesktopUpdateCoordinator {
+     ),
    ) {
      this.updater.autoDownload = false
      this.updater.autoInstallOnAppQuit = false
@@ -1460,7 +1822,9 @@ diff --git a/apps/desktop/tests/host-process.spec.ts b/apps/desktop/tests/host-p
 index d3a08d7..fdc9cc1 100644
 --- a/apps/desktop/tests/host-process.spec.ts
 +++ b/apps/desktop/tests/host-process.spec.ts
-@@ -76,4 +76,23 @@ afterEach(() => {
+@@ -74,8 +74,27 @@ afterEach(() => {
+   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+ })
  
  describe('desktop host process', () => {
 +  it('asks the Host to reserve idle state and accepts a busy response without stopping it', async () => {
@@ -1484,11 +1848,15 @@ index d3a08d7..fdc9cc1 100644
 +
    it('carries raw request and response bytes and shuts the child down cleanly', async () => {
      const project = projectWithHost(`
+ const bodies = new Map()
+ process.send({ type: 'ready', protocolVersion: 3, dshVersion: process.env.NODE_OPTIONS ?? 'clean' })
 diff --git a/apps/desktop/tests/project-manager.spec.ts b/apps/desktop/tests/project-manager.spec.ts
-index 27ac24f..80731fb 100644
+index 27ac24f..62822df 100644
 --- a/apps/desktop/tests/project-manager.spec.ts
 +++ b/apps/desktop/tests/project-manager.spec.ts
-@@ -86,8 +86,10 @@ function writeFakePnpm(root: string): string {
+@@ -84,12 +84,14 @@ function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): v
+ 
+ function writeFakePnpm(root: string): string {
    const path = join(root, 'pnpm.mjs')
    writeFileSync(path, String.raw`
 -import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -1500,7 +1868,11 @@ index 27ac24f..80731fb 100644
 +if (args.includes('store')) { console.log(storeDir); process.exit(0) }
  const command = args.find(value => value === 'install' || value === 'add' || value === 'remove')
  const manifestPath = join(project, 'package.json')
-@@ -127,5 +129,10 @@ for (const [name, version] of Object.entries(manifest.dependencies)) {
+ const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+ const packageName = spec => spec.startsWith('@')
+@@ -125,9 +127,14 @@ for (const [name, version] of Object.entries(manifest.dependencies)) {
+     writeFileSync(join(packageRoot, 'lib', 'index.js'), '')
+   }
  }
  writeFileSync(join(project, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
 -if (process.env.TEST_PNPM_LOG) writeFileSync(process.env.TEST_PNPM_LOG, JSON.stringify({ args, env: process.env }))
@@ -1512,7 +1884,11 @@ index 27ac24f..80731fb 100644
 +}
  `)
    return path
-@@ -174,4 +181,183 @@ afterEach(async () => {
+ }
+ 
+@@ -172,8 +179,187 @@ afterEach(async () => {
+   if (failures.length > 0) throw new AggregateError(failures, 'desktop worker cleanup failed')
+ })
  
  describe('desktop package policy', () => {
 +  it.each([false, true])('migrates the preceding public profile transactionally (preinstalled fallback: %s)', async (fallback) => {
@@ -1696,7 +2072,11 @@ index 27ac24f..80731fb 100644
 +
    it('accepts registry package specs but rejects alternate sources and flags', () => {
      expect(packageNameFromSpec('@scope/plugin@1.2.3')).toBe('@scope/plugin')
-@@ -194,4 +380,142 @@ describe('desktop package policy', () => {
+     expect(packageNameFromSpec('plugin@next')).toBe('plugin')
+     expect(() => packageNameFromSpec('file:../plugin')).toThrow(/unsupported npm package spec/u)
+@@ -192,8 +378,146 @@ describe('desktop package policy', () => {
+   })
+ })
  
  describe('desktop project transactions', () => {
 +  it('reuses an identical runtime across shell updates and preserves user changes', async () => {
@@ -1839,7 +2219,22 @@ index 27ac24f..80731fb 100644
 +
    it('installs the offline seed and reconciles a mismatched private Host', async () => {
      const root = temporaryRoot()
-@@ -363,8 +687,9 @@ describe('desktop project transactions', () => {
+     const seed = join(root, 'seed')
+     const log = join(root, 'pnpm-log.json')
+@@ -291,9 +615,9 @@ describe('desktop project transactions', () => {
+       stagingProfile,
+       step: 'prepared',
+     })}\n`)
+ 
+-    manager.recover()
++    await manager.recover()
+ 
+     expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0' }])
+     expect(existsSync(stagingProfile)).toBe(false)
+     expect(existsSync(paths.pending)).toBe(false)
+@@ -361,12 +685,13 @@ describe('desktop project transactions', () => {
+     expect(coreSpec).toMatch(/^file:\.\/desktop-packages\//u)
+     expect(readFileSync(join(paths.profile, 'pnpm-workspace.yaml'), 'utf8'))
        .toContain(`${JSON.stringify('@deepseek-ai/dsh')}: ${JSON.stringify(coreSpec)}`)
      expect(manifest.dependencies['@scope/plugin']).toBe('2.0.0')
 -    const invocation = JSON.parse(readFileSync(log, 'utf8')) as { args: string[]; env: Record<string, string> }
@@ -1853,17 +2248,90 @@ index 27ac24f..80731fb 100644
 +    expect(invocation.args).toContain('--frozen-lockfile')
      expect(invocation.env.NPM_CONFIG_REGISTRY).toBe('https://registry.npmjs.org/')
    })
+ 
+   it('reconciles dsh to the packaged release without removing desktop plugins', async () => {
 diff --git a/apps/desktop/tests/seed-store.spec.ts b/apps/desktop/tests/seed-store.spec.ts
-index e0e7d14..479c55a 100644
+index e0e7d14..8ad9888 100644
 --- a/apps/desktop/tests/seed-store.spec.ts
 +++ b/apps/desktop/tests/seed-store.spec.ts
-@@ -166,2 +166,24 @@ describe('desktop seed store archives', () => {
+@@ -4,8 +4,9 @@ import {
+   mkdirSync,
+   mkdtempSync,
+   readFileSync,
+   readdirSync,
++  renameSync,
+   rmSync,
+   statSync,
+   utimesSync,
+   writeFileSync,
+@@ -62,9 +63,9 @@ describe('desktop seed store cleanup', () => {
    })
  })
+ 
+ describe('desktop seed store merge', () => {
+-  it('preserves installed package records while the verified seed replaces matching records and files', { timeout: 30_000 }, () => {
++  it('preserves installed package records while the verified seed replaces matching records and files', { timeout: 30_000 }, async () => {
+     const root = temporaryRoot()
+     const source = join(root, 'source')
+     const destination = join(root, 'destination')
+     for (const store of [source, destination]) {
+@@ -84,9 +85,9 @@ describe('desktop seed store merge', () => {
+     writeFileSync(join(source, 'v11', 'files', 'shared'), 'new')
+     writeFileSync(join(destination, 'v11', 'files', 'shared'), 'old')
+     writeFileSync(join(destination, 'v11', 'files', 'plugin'), 'plugin')
+ 
+-    mergePnpmStore(source, destination)
++    await mergePnpmStore(source, destination)
+ 
+     const database = new DatabaseSync(join(destination, 'v11', 'index.db'), { readOnly: true })
+     const records = database.prepare('SELECT key, data FROM package_index ORDER BY key').all() as {
+       key: string
+@@ -103,9 +104,9 @@ describe('desktop seed store merge', () => {
+   })
+ })
+ 
+ describe('desktop seed store archives', () => {
+-  it('extracts package bytes and executable modes without retaining loose seed files', () => {
++  it('extracts package bytes and executable modes without retaining loose seed files', async () => {
+     const root = temporaryRoot()
+     const seed = join(root, 'seed')
+     const store = join(seed, 'store')
+     const executable = join(store, 'v10', 'files', 'native-addon')
+@@ -115,9 +116,9 @@ describe('desktop seed store archives', () => {
+     writeFileSync(join(store, 'v10', 'files', 'package-data'), 'package')
+ 
+     archivePnpmStore(seed, store)
+     const destination = join(root, 'extracted')
+-    extractPnpmStoreArchives(seed, destination)
++    await extractPnpmStoreArchives(seed, destination)
+ 
+     expect(existsSync(store)).toBe(false)
+     expect(readFileSync(join(destination, 'v10', 'files', 'package-data'), 'utf8')).toBe('package')
+     if (process.platform !== 'win32') {
+@@ -145,9 +146,9 @@ describe('desktop seed store archives', () => {
+     expect(second.map(entry => entry.path)).toEqual(first.map(entry => entry.path))
+     expect(second.map(entry => entry.body)).toEqual(first.map(entry => entry.body))
+   })
+ 
+-  it('rejects an archive whose entry count differs from the manifest', () => {
++  it('rejects an archive whose entry count differs from the manifest', async () => {
+     const root = temporaryRoot()
+     const seed = join(root, 'seed')
+     const store = join(seed, 'store')
+     mkdirSync(store, { recursive: true })
+@@ -161,7 +162,65 @@ describe('desktop seed store archives', () => {
+     if (archive === undefined) throw new Error('test seed has no archive')
+     archive.entries += 1
+     writeFileSync(manifestPath, JSON.stringify(manifest))
+ 
+-    expect(() => { extractPnpmStoreArchives(seed, join(root, 'extracted')) }).toThrow(/unexpected entry count/u)
++    await expect(extractPnpmStoreArchives(seed, join(root, 'extracted'))).rejects.toThrow(/unexpected entry count/u)
++  })
++})
 +
 +
 +describe('delta-friendly store transport', () => {
-+  it('keeps large binary archives identical when metadata and small packages change', () => {
++  it('keeps large binary archives identical when metadata and small packages change', async () => {
 +    const root = temporaryRoot()
 +    for (const [name, small] of [['old', 'first'], ['new', 'a different length']]) {
 +      const seed = join(root, name!), store = join(seed, 'store')
@@ -1872,7 +2340,7 @@ index e0e7d14..479c55a 100644
 +      writeFileSync(join(store, 'v11', 'small-package'), small!)
 +      writeFileSync(join(store, 'v11', 'index.db'), small!)
 +      archivePnpmStore(seed, store)
-+      extractPnpmStoreArchives(seed, join(seed, 'restored'))
++      await extractPnpmStoreArchives(seed, join(seed, 'restored'))
 +      expect(readFileSync(join(seed, 'restored', 'v11', 'small-package'), 'utf8')).toBe(small)
 +    }
 +    const old = archiveBytes(join(root, 'old'))
@@ -1882,11 +2350,49 @@ index e0e7d14..479c55a 100644
 +    expect(next.find(file => file.path === large.path)?.body).toEqual(large.body)
 +  })
 +})
++
++describe('responsive seed preparation', () => {
++  it('allows window work during archive extraction and package-store copying', async () => {
++    const root = temporaryRoot(), seed = join(root, 'seed'), store = join(seed, 'store')
++    mkdirSync(join(store, 'v11', 'files'), { recursive: true })
++    for (let i = 0; i < 8; i++) writeFileSync(join(store, 'v11', 'files', `package-${i}`), Buffer.alloc(1024 * 1024, i))
++    archivePnpmStore(seed, store)
++    let ticks = 0
++    const heartbeat = setInterval(() => { ticks++ }, 1)
++    try {
++      const extracted = join(root, 'extracted')
++      await extractPnpmStoreArchives(seed, extracted)
++      expect(ticks).toBeGreaterThan(0)
++      ticks = 0
++      await mergePnpmStore(extracted, join(root, 'persistent'))
++      expect(ticks).toBeGreaterThan(0)
++    } finally { clearInterval(heartbeat) }
++  })
++
++  it('rejects misplaced entries before extracting any archive', async () => {
++    const root = temporaryRoot(), seed = join(root, 'seed'), store = join(seed, 'store')
++    mkdirSync(store, { recursive: true })
++    writeFileSync(join(store, 'package-data'), 'preserve validation')
++    archivePnpmStore(seed, store)
++    const manifestFile = join(seed, SEED_STORE_ARCHIVE_MANIFEST)
++    const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
++    const archive = manifest.archives[0]
++    const wrongName = archive.file === 'store-00.tar' ? 'store-01.tar' : 'store-00.tar'
++    renameSync(join(seed, SEED_STORE_ARCHIVE_DIR, archive.file), join(seed, SEED_STORE_ARCHIVE_DIR, wrongName))
++    archive.file = wrongName
++    writeFileSync(manifestFile, JSON.stringify(manifest))
++    const extracted = join(root, 'extracted')
++    await expect(extractPnpmStoreArchives(seed, extracted)).rejects.toThrow(/wrong archive shard/u)
++    expect(readdirSync(extracted)).toEqual([])
+   })
+ })
 diff --git a/apps/desktop/tests/update-coordinator.spec.ts b/apps/desktop/tests/update-coordinator.spec.ts
 index 272ef03..8750146 100644
 --- a/apps/desktop/tests/update-coordinator.spec.ts
 +++ b/apps/desktop/tests/update-coordinator.spec.ts
-@@ -43,4 +43,91 @@ describe('desktop release metadata', () => {
+@@ -41,8 +41,95 @@ describe('desktop release metadata', () => {
+   })
+ })
  
  describe('desktop update coordinator', () => {
 +  it('downloads separately, reports actual progress and waits for an explicit restart', async () => {
@@ -1978,10 +2484,16 @@ index 272ef03..8750146 100644
 +
    it('installs one Electron release and restarts after download', async () => {
      const states: DesktopUpdateState[] = []
-@@ -72,5 +159,5 @@ describe('desktop update coordinator', () => {
+     const downloadUpdate = vi.fn(async () => [])
+     const quitAndInstall = vi.fn()
+@@ -70,9 +157,9 @@ describe('desktop update coordinator', () => {
+     await expect(coordinator.check()).resolves.toEqual({ phase: 'available', version: '1.1.0' })
+     await expect(coordinator.install()).resolves.toEqual({ phase: 'ready', version: '1.1.0' })
      expect(downloadUpdate).toHaveBeenCalledOnce()
      expect(beforeRestart).toHaveBeenCalledOnce()
 -    expect(quitAndInstall).toHaveBeenCalledWith(false, true)
 +    expect(quitAndInstall).toHaveBeenCalledWith(true, true)
      expect(states.map(state => state.phase)).toEqual(['checking', 'available', 'installing', 'ready'])
    })
+ 
+   it('queues install behind an in-flight check instead of returning the check result', async () => {

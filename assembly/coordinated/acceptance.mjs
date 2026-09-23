@@ -13,6 +13,7 @@ import { _electron, expect } from '@playwright/test'
 import { directory, root } from './prepare.mjs'
 import { assertExternalWebNavigation } from './external-navigation-acceptance.mjs'
 import { assertCredentialRecovery } from './credential-recovery-acceptance.mjs'
+import { assertRuntimeRecovery } from './runtime-recovery-acceptance.mjs'
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const legacyExecutable = process.argv.find(value => value.startsWith('--legacy-executable='))?.slice('--legacy-executable='.length)
@@ -120,7 +121,16 @@ const launch = async receipt => {
       if (!found) await new Promise(resolve => setTimeout(resolve, 250))
     }
     assert.ok(found, 'The preceding public Desktop must boot its real Web carrier.')
-  } else await page.waitForURL('dsh-app://app/index.html', { timeout: 180000 })
+  } else {
+    await page.waitForURL('dsh-app://app/index.html', { timeout: 180000 })
+    if (receipt.input.productVersion === candidate?.input.productVersion) {
+      await expect.poll(() => json(join(home, 'desktop/startup.json')).ready, { timeout: 10000 }).toBe(true)
+      const startup = json(join(home, 'desktop/startup.json'))
+      assert.ok(Number.isFinite(startup.maxMainThreadDelayMs) && startup.maxMainThreadDelayMs < 5000,
+        `Startup must keep the native window responsive, longest stall: ${startup.maxMainThreadDelayMs} ms`)
+      console.log(JSON.stringify({ phase: 'startup-responsive', startup }))
+    }
+  }
   await expect(page.getByRole('button', { name: '选择工作区', exact: true })).toBeVisible({ timeout: 90000 })
   const notice = page.getByRole('dialog', { name: '内测声明', exact: true })
   if (await notice.isVisible()) {
@@ -496,9 +506,12 @@ try {
       assert.deepEqual({ text: readFileSync(modules, 'utf8'), mtime: statSync(modules).mtimeMs }, beforeStartup)
     }
   }
-  let credentialRecovery
+  let credentialRecovery, runtimeRecovery
   if (!candidate && !legacyExecutable) {
     await close()
+    if (process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+      runtimeRecovery = await assertRuntimeRecovery({ executablePath: baseline.executable, state, home, electronHome, env })
+    }
     credentialRecovery = await assertCredentialRecovery({ executablePath: baseline.executable, state, home, electronHome, env })
     await launch(baseline)
     assert.equal((await api('status')).connected, false)
@@ -516,13 +529,20 @@ try {
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { pnpm10To11: migratePnpm10, sameReleaseStoreRepair: migratePnpm10,
     thirdPartyPluginPreserved: migratePnpm10 || !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
-    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, launches })
+    repeatedStartupDoesNotRebuild: migratePnpm10, nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, runtimeRecovery, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   if (candidate) writeFileSync(join(candidate.output, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   console.log(JSON.stringify(receipt))
 } catch (error) {
   console.error(error)
   if (existsSync(join(state, 'startup-error.log'))) console.error(readFileSync(join(state, 'startup-error.log'), 'utf8'))
+  if (nativeUpdate && process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+    if (existsSync(join(state, 'electron.log'))) console.error(readFileSync(join(state, 'electron.log'), 'utf8').slice(-16000))
+    try {
+      console.error(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        join(directory, 'installer-diagnostics.ps1')], { encoding: 'utf8', windowsHide: true, timeout: 15000 }))
+    } catch { console.error('Installer window diagnostics were unavailable') }
+  }
   console.error(`Acceptance state: ${state}`)
   throw error
 } finally {
