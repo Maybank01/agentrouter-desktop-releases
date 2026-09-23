@@ -53,13 +53,54 @@ After the accepted product input has `candidateOnly: false` and signing works:
 gh workflow run release.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f delivery=coordinated -F publish=true
 ```
 
-The workflow repeats candidate acceptance, signs the product, verifies a native
-signed update/restart without installing a root certificate, then stages a draft,
-then installs those exact signed bytes on a separate hosted Windows worker.
-Only then does it publish the draft. Its final anonymous check verifies the
-installer, blockmap, updater feed and both receipts. The website uses
-`release-receipt.json` and `signed-installed-acceptance.json` to recognize the
-new client; a test-only or unsigned candidate cannot enter that path.
+Timeline (2026-09-23; the previous serial path took about 34-40 minutes):
+
+| Job | Worker | Typical |
+| --- | --- | --- |
+| Select reusable installed acceptance evidence | Ubuntu | < 1 min |
+| Accept coordinated installers before signing (only without evidence) | Windows | ~14 min |
+| Sign and stage the exact product release | Windows, `windows-signing` | ~5 min |
+| Signed native update and restart / Signed legacy Profile migration / Install signed bytes on a clean worker (parallel) | 3 × Windows | ~9 min (longest) |
+| Publish the accepted signed release and verify delivery | Windows | ~2-7 min |
+
+With reusable evidence a release takes about 17-22 minutes; without it about 31-36.
+
+**Evidence reuse.** `coordinated-evidence.mjs` looks for a successful `ci.yml`
+run of this repository (never a fork) whose five jobs (source boundaries,
+adapter transactions/store migration and the three installed scenarios) all
+concluded `success` in their latest attempt. The run's tested tree must have
+the same digest as the release commit over every file `ci-scope.mjs` marks as
+requiring installed acceptance. This includes `adapter-source.json`, the
+exported adapter, `release.yml` and the release scripts. A `pull_request` run
+counts only when its PR base is an ancestor of the tested head, so its merge
+tree equals the head tree. Its identity (run ID, attempt, job IDs, tested and
+release tree SHAs, digest) is recorded as `acceptanceEvidence` in the receipt;
+signing, every post-sign job and recovery re-check it against the release commit.
+When no run matches, the release repeats the complete candidate acceptance and
+records `installedCandidate` instead. `publish=false` always runs the candidate job.
+
+**Parallel signed checks.** The sign job stages the draft with
+`staged-release-receipt.json` (source commit, workflow run ID, pre-sign acceptance).
+Three sibling jobs download that draft, require its receipt to name this commit
+and this run, verify bytes, Authenticode and the signed manifest, then run on
+separate disposable workers: the native signed update/restart from a signed
+baseline (the only sibling holding the signing key), the previous public
+Profile migration into the signed installer, and a clean installation with
+runtime/credential recovery. Each attaches its record (`signed-native-update.json`,
+`signed-legacy-migration.json`, `signed-fresh-install.json`) to the draft.
+Publish needs all of them. It adds both signed summaries to the final
+`release-receipt.json`, writes `signed-installed-acceptance.json` and then
+publishes. Its final anonymous check verifies the installer, blockmap, updater
+feed and both receipts. The website uses `release-receipt.json` and
+`signed-installed-acceptance.json` to recognize the new client; a test-only or
+unsigned candidate cannot enter that path.
+
+**Unpublished drafts (owner decision 2026-09-23).** If a draft of the same
+version exists and was never published (`draft: true`, `published_at: null`),
+a new signing run deletes it and stages a fresh draft for that version. A
+version that was ever published, or whose tag exists, is never replaced. A new
+version must be newer than every published formal release, so latest never
+moves backwards.
 
 The same final step also checks the server-rendered Windows card at
 `https://agentrouter.top/for-dsh`: its visible version, GitHub installer link,
@@ -74,7 +115,10 @@ If only final public observation fails, rerun the failed publish job from that
 same workflow run after inspecting the failure. It downloads the original
 assets and retains the original installed receipt. It never replaces published
 assets, rebuilds an installer under the same version or moves a newer latest
-release backwards. A changed package or installer requires a new version.
+release backwards. A changed package or installer of a published version
+requires a new version; an unpublished draft may be re-signed as described above.
+If a post-sign job fails, re-run the failed jobs of the same workflow run: they
+reuse the staged draft and replace only their own record on it.
 
 If the publisher itself needs a reviewed fix after signing, resume from current
 main using the original completed run ID:
@@ -83,8 +127,10 @@ main using the original completed run ID:
 gh workflow run release.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f delivery=coordinated -F publish=true -f resume_signed_run=<original-run-id>
 ```
 
-Recovery requires the original main dispatch's candidate and signed-upgrade jobs
-to have passed. Its source must be an ancestor, and the complete exported adapter
+Recovery requires the original main dispatch's pre-sign acceptance (evidence
+or candidate job), signing, signed native update and signed legacy migration
+jobs to have passed, and the draft receipt to name that run. Reused evidence is
+re-checked through its immutable job IDs and tested tree. Its source must be an ancestor, and the complete exported adapter
 and product recipe must remain byte-identical. The new worker verifies and installs
 the existing signed assets again; it does not rebuild, sign, replace assets or
 change their source identity. The installed receipt also records the verifier's

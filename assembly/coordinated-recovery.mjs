@@ -5,6 +5,25 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { root } from './lib.mjs'
+import { localInputs, verifyRecordedEvidence } from './coordinated-evidence.mjs'
+import { readReleaseReceipt } from './coordinated-signed.mjs'
+
+// Job names in release.yml. Recovery requires every job that produced the
+// signed draft and its signed installed checks to have passed originally.
+export const releaseJobs = {
+  evidence: 'Select reusable installed acceptance evidence',
+  candidate: 'Accept coordinated installers before signing',
+  sign: 'Sign and stage the exact product release',
+  signedUpdate: 'Signed native update and restart',
+  signedLegacy: 'Signed legacy Profile migration',
+  signedInstall: 'Install signed bytes on a clean worker',
+}
+
+export function requiredRecoveryJobs(receipt) {
+  if (receipt.schemaVersion === 1) return [releaseJobs.candidate, releaseJobs.sign]
+  return [receipt.acceptanceEvidence ? releaseJobs.evidence : releaseJobs.candidate, releaseJobs.sign,
+    releaseJobs.signedUpdate, releaseJobs.signedLegacy]
+}
 
 export function validateSignedRecovery({ run, jobs, receipt, input, adapterSource }) {
   assert.equal(run.repository.full_name, 'Maybank01/agentrouter-desktop-releases')
@@ -21,21 +40,30 @@ export function validateSignedRecovery({ run, jobs, receipt, input, adapterSourc
   assert.equal(receipt.signed, true)
   assert.equal(receipt.testOnly, false)
   assert.deepEqual(receipt.signing, input.signing)
-  assert.equal(receipt.installedSignedUpdate.passed, true)
-  assert.equal(receipt.installedSignedUpdate.nativeUpdaterExecuted, true)
-  assert.equal(receipt.installedSignedUpdate.nativeSignatureVerificationExecuted, true)
-  assert.equal(receipt.installedSignedUpdate.installerRestartedApp, true)
-  assert.equal(receipt.installedSignedUpdate.rootTrustInstalled, false)
   const installers = receipt.assets.filter(file => file.name.endsWith('.exe'))
   assert.equal(installers.length, 1)
   assert.match(installers[0].sha256, /^[a-f0-9]{64}$/)
-  assert.equal(receipt.installedSignedUpdate.signedInstallerSha256, installers[0].sha256)
-  for (const name of ['Accept coordinated installers before signing', 'Sign and stage the exact product release']) {
+  if (receipt.schemaVersion !== 1) {
+    assert.equal(receipt.schemaVersion, 2)
+    assert.equal(String(receipt.workflowRun?.id), String(run.id), 'The draft was staged by another run')
+    assert.ok(Boolean(receipt.acceptanceEvidence) !== Boolean(receipt.installedCandidate))
+  }
+  // Schema 1 receipts carry the signed update; schema 2 drafts may still hold
+  // the staged receipt, whose signed records publish validates before use.
+  if (receipt.schemaVersion === 1 || receipt.installedSignedUpdate) {
+    assert.equal(receipt.installedSignedUpdate.passed, true)
+    assert.equal(receipt.installedSignedUpdate.nativeUpdaterExecuted, true)
+    assert.equal(receipt.installedSignedUpdate.nativeSignatureVerificationExecuted, true)
+    assert.equal(receipt.installedSignedUpdate.installerRestartedApp, true)
+    assert.equal(receipt.installedSignedUpdate.rootTrustInstalled, false)
+    assert.equal(receipt.installedSignedUpdate.signedInstallerSha256, installers[0].sha256)
+  }
+  for (const name of requiredRecoveryJobs(receipt)) {
     const matches = jobs.filter(job => job.name === name)
     assert.equal(matches.length, 1)
     assert.equal(matches[0].conclusion, 'success', `The original ${name} job must have passed`)
   }
-  return { sourceCommit: run.head_sha }
+  return { sourceCommit: run.head_sha, runId: String(run.id) }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -47,16 +75,24 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted')
   const runId = process.env.RESUME_SIGNED_RUN
   assert.match(runId ?? '', /^[1-9][0-9]{0,19}$/)
-  const gh = args => JSON.parse(execFileSync('gh', args, { cwd: root, encoding: 'utf8', windowsHide: true }))
+  const gh = args => JSON.parse(execFileSync('gh', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }))
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 })
   const json = file => JSON.parse(readFileSync(file, 'utf8'))
   const run = gh(['api', `repos/${repo}/actions/runs/${runId}`])
-  const { jobs } = gh(['api', `repos/${repo}/actions/runs/${runId}/jobs?per_page=100`])
-  const accepted = validateSignedRecovery({ run, jobs,
-    receipt: json(join(resolve(process.argv[2]), 'release-receipt.json')),
+  const { jobs } = gh(['api', `repos/${repo}/actions/runs/${runId}/jobs?filter=latest&per_page=100`])
+  const { receipt } = readReleaseReceipt(resolve(process.argv[2]))
+  const accepted = validateSignedRecovery({ run, jobs, receipt,
     input: json(join(root, 'assembly/coordinated/release.json')),
     adapterSource: json(join(root, 'assembly/coordinated/adapter-source.json')) })
   execFileSync('git', ['merge-base', '--is-ancestor', accepted.sourceCommit, 'HEAD'], { cwd: root, windowsHide: true })
   execFileSync('git', ['diff', '--exit-code', accepted.sourceCommit, 'HEAD', '--', 'assembly/coordinated'], { cwd: root, windowsHide: true })
-  appendFileSync(process.env.GITHUB_ENV, `AGENTROUTER_STAGED_SOURCE_SHA=${accepted.sourceCommit}\n`)
+  if (receipt.acceptanceEvidence) {
+    // Reused ci.yml evidence: its immutable job records and tested tree must still match.
+    const evidence = receipt.acceptanceEvidence
+    verifyRecordedEvidence({ evidence, release: localInputs(accepted.sourceCommit, git),
+      jobs: evidence.jobs.map(job => gh(['api', `repos/${repo}/actions/jobs/${job.id}`])),
+      tree: gh(['api', `repos/${repo}/git/trees/${evidence.testedTreeSha}?recursive=1`]) })
+  }
+  appendFileSync(process.env.GITHUB_ENV, `AGENTROUTER_STAGED_SOURCE_SHA=${accepted.sourceCommit}\nAGENTROUTER_STAGED_RUN_ID=${accepted.runId}\n`)
   console.log(JSON.stringify({ resumedRun: runId, ...accepted, rebuild: false, signedInstallationStillRequired: true }))
 }

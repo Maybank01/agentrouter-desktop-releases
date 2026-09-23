@@ -247,15 +247,21 @@ jobs:
           if-no-files-found: ignore
           path: artifacts/
 
-  coordinated:
-    name: Accept coordinated installers before signing
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.resume_signed_run == ''
-    runs-on: windows-2025
-    timeout-minutes: 60
+  # Coordinated lane: reuse ci.yml installed acceptance of identical product
+  # inputs when it exists, sign once, then run every signed installed check
+  # against the staged draft in parallel on separate disposable workers.
+  coordinated_evidence:
+    name: Select reusable installed acceptance evidence
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && inputs.resume_signed_run == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
     outputs:
-      receipt: ${{ steps.accept.outputs.receipt }}
+      found: ${{ steps.evidence.outputs.found }}
+      evidence: ${{ steps.evidence.outputs.evidence }}
       selection: ${{ steps.selection.outputs.selection }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -265,17 +271,39 @@ jobs:
         with:
           node-version: 24.15.0
       - name: Require a reviewed formal version before publication
-        if: inputs.publish
         shell: pwsh
         run: |
           $release = Get-Content assembly/coordinated/release.json -Raw | ConvertFrom-Json
           if ($release.candidateOnly) { throw 'The product version is still candidate-only' }
       - id: selection
         name: Check published modules are included before expensive acceptance
-        if: inputs.publish
         env:
           RETAIN_PLUGIN_REASON: ${{ inputs.retain_plugin_reason }}
         run: node assembly/coordinated-inputs.mjs
+      - run: npm test
+      - id: evidence
+        name: Find a ci.yml run that installed these exact product inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node assembly/coordinated-evidence.mjs
+
+  coordinated:
+    name: Accept coordinated installers before signing
+    needs: coordinated_evidence
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.resume_signed_run == '' && (!inputs.publish || (needs.coordinated_evidence.result == 'success' && needs.coordinated_evidence.outputs.found != 'true')) }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      receipt: ${{ steps.accept.outputs.receipt }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
       - run: npm test
       - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
       - run: node assembly/coordinated/test.mjs
@@ -284,8 +312,8 @@ jobs:
 
   coordinated_sign:
     name: Sign and stage the exact product release
-    needs: coordinated
-    if: inputs.publish && inputs.delivery == 'coordinated'
+    needs: [coordinated_evidence, coordinated]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && inputs.resume_signed_run == '' && needs.coordinated_evidence.result == 'success' && (needs.coordinated_evidence.outputs.found == 'true' || needs.coordinated.result == 'success') }}
     runs-on: windows-2025
     environment: windows-signing
     timeout-minutes: 60
@@ -326,26 +354,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content installer-build.log -Tail 60; throw 'Signed installer failed' }
           $packaged = Get-Content installer-build.log -Tail 1 | ConvertFrom-Json
           "receipt=$($packaged.installerReceipt)" >> $env:GITHUB_OUTPUT
-      - name: Exercise native signed update and restart using these exact release bytes
-        id: signed_update
-        shell: pwsh
-        env:
-          CANDIDATE_FILE: ${{ steps.build.outputs.candidate }}
-          INSTALLER_RECEIPT: ${{ steps.package.outputs.receipt }}
-        run: |
-          node assembly/coordinated/installer-acceptance.mjs "$env:CANDIDATE_FILE" "--signed-installer=$env:INSTALLER_RECEIPT" > signed-update.log
-          if ($LASTEXITCODE -ne 0) { Get-Content signed-update.log -Tail 60; throw 'Native signed update acceptance failed' }
-          $accepted = Get-Content signed-update.log -Tail 1 | ConvertFrom-Json
-          "receipt=$($accepted.receipt)" >> $env:GITHUB_OUTPUT
-      - name: Stage signed bytes without changing the product feed
+      - name: Stage signed bytes as an unpublished draft without changing the product feed
         id: stage
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           INSTALLER_RECEIPT: ${{ steps.package.outputs.receipt }}
           ACCEPTED_CANDIDATE_JSON: ${{ needs.coordinated.outputs.receipt }}
-          SIGNED_UPGRADE_RECEIPT: ${{ steps.signed_update.outputs.receipt }}
-          RELEASE_SELECTION_JSON: ${{ needs.coordinated.outputs.selection }}
+          ACCEPTANCE_EVIDENCE_JSON: ${{ needs.coordinated_evidence.outputs.evidence }}
+          RELEASE_SELECTION_JSON: ${{ needs.coordinated_evidence.outputs.selection }}
         run: |
           node assembly/coordinated-release.mjs stage "$env:INSTALLER_RECEIPT"
           if ($LASTEXITCODE -ne 0) { throw 'Signed release staging failed' }
@@ -360,10 +377,147 @@ jobs:
             if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -DeleteKey -Force }
           }
 
-  coordinated_publish:
-    name: Install signed bytes before making them available
+  coordinated_signed_update:
+    name: Signed native update and restart
     needs: coordinated_sign
-    if: always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && (needs.coordinated_sign.result == 'success' || inputs.resume_signed_run != '')
+    runs-on: windows-2025
+    environment: windows-signing
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Download the exact draft assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.coordinated_sign.outputs.tag }}
+        run: gh release download "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir .local/signed-release
+      - name: Verify the draft was staged from this commit by this run
+        run: node assembly/coordinated-release.mjs signed-target .local/signed-release .local/signed-installer.json
+      - name: Build the reviewed source for the signed baseline
+        id: build
+        shell: pwsh
+        run: |
+          node assembly/coordinated/build.mjs > candidate-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content candidate-build.log -Tail 60; throw 'Product build failed' }
+          $built = Get-Content candidate-build.log -Tail 1 | ConvertFrom-Json
+          "candidate=$($built.candidate)" >> $env:GITHUB_OUTPUT
+      - name: Import the reviewed self-signed key without changing Windows root trust
+        shell: pwsh
+        env:
+          AGENTROUTER_SIGNING_PFX: ${{ secrets.AGENTROUTER_SIGNING_PFX }}
+          AGENTROUTER_SIGNING_PASSWORD: ${{ secrets.AGENTROUTER_SIGNING_PASSWORD }}
+        run: ./assembly/coordinated/import-signing-key.ps1
+      - name: Exercise native signed update and restart using these exact release bytes
+        id: accept
+        shell: pwsh
+        env:
+          CANDIDATE_FILE: ${{ steps.build.outputs.candidate }}
+        run: |
+          node assembly/coordinated/installer-acceptance.mjs "$env:CANDIDATE_FILE" --scenario=native-updater --signed-installer=.local/signed-installer.json > signed-update.log
+          if ($LASTEXITCODE -ne 0) { Get-Content signed-update.log -Tail 60; throw 'Native signed update acceptance failed' }
+          $accepted = Get-Content signed-update.log -Tail 1 | ConvertFrom-Json
+          "receipt=$($accepted.receipt)" >> $env:GITHUB_OUTPUT
+      - name: Record the signed update on this run's draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTANCE_RECEIPT: ${{ steps.accept.outputs.receipt }}
+        run: node assembly/coordinated-release.mjs record .local/signed-release native-updater "$env:ACCEPTANCE_RECEIPT"
+      - name: Remove the temporary signing key
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:AGENTROUTER_SIGNING_CERT_THUMBPRINT -match '^[A-Fa-f0-9]{40}$') {
+            $key = "Cert:/CurrentUser/My/$env:AGENTROUTER_SIGNING_CERT_THUMBPRINT"
+            if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -DeleteKey -Force }
+          }
+
+  coordinated_signed_legacy:
+    name: Signed legacy Profile migration
+    needs: coordinated_sign
+    runs-on: windows-2025
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Download the exact draft assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.coordinated_sign.outputs.tag }}
+        run: gh release download "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir .local/signed-release
+      - name: Verify the draft was staged from this commit by this run
+        run: node assembly/coordinated-release.mjs signed-target .local/signed-release .local/signed-installer.json
+      - name: Build the reviewed source for the installed target metadata
+        id: build
+        shell: pwsh
+        run: |
+          node assembly/coordinated/build.mjs > candidate-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content candidate-build.log -Tail 60; throw 'Product build failed' }
+          $built = Get-Content candidate-build.log -Tail 1 | ConvertFrom-Json
+          "candidate=$($built.candidate)" >> $env:GITHUB_OUTPUT
+      - name: Migrate the previous public Desktop Profile into these exact signed bytes
+        id: accept
+        shell: pwsh
+        env:
+          CANDIDATE_FILE: ${{ steps.build.outputs.candidate }}
+        run: |
+          node assembly/coordinated/installer-acceptance.mjs "$env:CANDIDATE_FILE" --scenario=legacy-migration --signed-installer=.local/signed-installer.json > signed-legacy.log
+          if ($LASTEXITCODE -ne 0) { Get-Content signed-legacy.log -Tail 60; throw 'Signed legacy migration acceptance failed' }
+          $accepted = Get-Content signed-legacy.log -Tail 1 | ConvertFrom-Json
+          "receipt=$($accepted.receipt)" >> $env:GITHUB_OUTPUT
+      - name: Record the signed legacy migration on this run's draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTANCE_RECEIPT: ${{ steps.accept.outputs.receipt }}
+        run: node assembly/coordinated-release.mjs record .local/signed-release legacy-migration "$env:ACCEPTANCE_RECEIPT"
+
+  coordinated_signed_install:
+    name: Install signed bytes on a clean worker
+    needs: coordinated_sign
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Download the exact draft assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.coordinated_sign.outputs.tag }}
+        run: gh release download "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir .local/signed-release
+      - name: Verify Authenticode and install the signed product
+        run: node assembly/coordinated-release.mjs accept .local/signed-release
+      - name: Record the clean-worker installation on this run's draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node assembly/coordinated-release.mjs record .local/signed-release fresh-install
+
+  coordinated_publish:
+    name: Publish the accepted signed release and verify delivery
+    needs: [coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && ((needs.coordinated_sign.result == 'success' && needs.coordinated_signed_update.result == 'success' && needs.coordinated_signed_legacy.result == 'success' && needs.coordinated_signed_install.result == 'success') || inputs.resume_signed_run != '') }}
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -377,7 +531,6 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24.15.0
-      - run: npm test
       - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
       - name: Download the exact draft assets
         shell: pwsh
@@ -396,7 +549,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RESUME_SIGNED_RUN: ${{ inputs.resume_signed_run }}
         run: node assembly/coordinated-recovery.mjs .local/signed-release
-      - name: Verify Authenticode and install the signed product
+      - name: Verify Authenticode and install the signed product again before resuming
+        if: inputs.resume_signed_run != ''
         run: node assembly/coordinated-release.mjs accept .local/signed-release
       - name: Publish and verify the website, downloads and update feed
         env:

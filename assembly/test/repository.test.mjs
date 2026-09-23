@@ -51,7 +51,7 @@ test('optional Desktop publication is manually dispatched on main and never foll
 
   // Preserve the historical community lane's contract; the new product lane
   // below is separately bound to the exported source and installed acceptance.
-  const release = readFileSync(join(directory, 'release.yml'), 'utf8').split('\n  coordinated:')[0]
+  const release = readFileSync(join(directory, 'release.yml'), 'utf8').split('\n  # Coordinated lane:')[0]
   assert.doesNotMatch(release, /schedule:|cron:|repository_dispatch:|workflow_run:/)
   assert.match(release, /workflow_dispatch:/)
   assert.match(release, /github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/)
@@ -63,10 +63,12 @@ test('optional Desktop publication is manually dispatched on main and never foll
   assert.match(release, /npm run assembly:refresh-lock/)
   assert.match(release, /npm run build:win/)
   assert.match(release, /contents: write/)
-  // Release acceptance keeps the full sequential native update + legacy migration.
+  // The unsigned release fallback keeps the full sequential native update +
+  // legacy migration; signed checks run as single scenarios on the signed draft.
   const coordinatedRelease = readFileSync(join(directory, 'release.yml'), 'utf8')
   assert.match(coordinatedRelease, /run: node assembly\/coordinated-candidate\.mjs\r?\n/)
-  assert.doesNotMatch(coordinatedRelease, /--scenario/)
+  assert.deepEqual(coordinatedRelease.match(/--scenario=[\w-]+/g), ['--scenario=native-updater', '--scenario=legacy-migration'])
+  assert.equal((coordinatedRelease.match(/--scenario=[\w-]+ --signed-installer=\.local\/signed-installer\.json/g) ?? []).length, 2)
   assert.equal((release.match(/GH_TOKEN: \$\{\{ github\.token \}\}/g) ?? []).length, 2)
   assert.equal((release.match(/persist-credentials: false/g) ?? []).length, 2)
   assert.match(release, /GITHUB_REPOSITORY/)
@@ -84,6 +86,40 @@ test('optional Desktop publication is manually dispatched on main and never foll
   assert.doesNotMatch(release, /AUTHORIZATION: bearer/)
   assert.doesNotMatch(release, /create-github-app-token|PUBLIC_RELEASE_APP|secrets\./u)
   assert.doesNotMatch(release, /npm publish|NODE_AUTH_TOKEN|NPM_TOKEN|pull-request|channels\/|latest\/download/u)
+})
+
+test('coordinated release reuses exact-input evidence and runs signed checks in parallel before publishing', () => {
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8')
+  const lane = workflow.split('\n  # Coordinated lane:')[1]
+  const jobs = Object.fromEntries(lane.split(/\n  (?=[a-z_]+:\r?\n)/).slice(1).map(body => [body.slice(0, body.indexOf(':')), body]))
+  assert.deepEqual(Object.keys(jobs), ['coordinated_evidence', 'coordinated', 'coordinated_sign', 'coordinated_signed_update',
+    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_publish'])
+  for (const [name, body] of Object.entries(jobs)) {
+    assert.equal((body.match(/uses: actions\/checkout@/g) ?? []).length, 1, name)
+    assert.equal((body.match(/persist-credentials: false/g) ?? []).length, 1, name)
+    assert.doesNotMatch(body, /upload-artifact|actions\/cache|self-hosted|pull_request_target|--clobber/, name)
+  }
+  // Evidence lookup reads Actions metadata only; it cannot write or sign.
+  assert.match(jobs.coordinated_evidence, /runs-on: ubuntu-latest/)
+  assert.match(jobs.coordinated_evidence, /permissions:\r?\n      contents: read\r?\n      actions: read\r?\n      pull-requests: read\r?\n    outputs:/)
+  assert.match(jobs.coordinated_evidence, /node assembly\/coordinated-inputs\.mjs/)
+  assert.match(jobs.coordinated_evidence, /node assembly\/coordinated-evidence\.mjs/)
+  assert.match(jobs.coordinated, /needs\.coordinated_evidence\.outputs\.found != 'true'/)
+  assert.match(jobs.coordinated_sign, /needs\.coordinated_evidence\.outputs\.found == 'true' \|\| needs\.coordinated\.result == 'success'/)
+  assert.match(jobs.coordinated_sign, /ACCEPTANCE_EVIDENCE_JSON: \$\{\{ needs\.coordinated_evidence\.outputs\.evidence \}\}/)
+  // Only signing and the signed-baseline update hold the signing environment.
+  assert.deepEqual(Object.keys(jobs).filter(name => /environment: windows-signing/.test(jobs[name])), ['coordinated_sign', 'coordinated_signed_update'])
+  for (const name of ['coordinated_signed_update', 'coordinated_signed_legacy', 'coordinated_signed_install']) {
+    assert.match(jobs[name], /needs: coordinated_sign\r?\n/)
+    assert.match(jobs[name], /gh release download "\$env:RELEASE_TAG"/)
+    assert.match(jobs[name], /node assembly\/coordinated-release\.mjs record \.local\/signed-release /)
+  }
+  assert.match(jobs.coordinated_publish, /needs: \[coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install\]/)
+  for (const name of ['coordinated_sign', 'coordinated_signed_update', 'coordinated_signed_legacy', 'coordinated_signed_install']) {
+    assert.match(jobs.coordinated_publish, new RegExp(`needs\\.${name}\\.result == 'success'`), name)
+  }
+  assert.match(jobs.coordinated_publish, /node assembly\/coordinated-recovery\.mjs/)
+  assert.match(jobs.coordinated_publish, /node assembly\/coordinated-release\.mjs publish/)
 })
 
 test('native smoke clears only the expected bilingual first-run dialogs', () => {
