@@ -192,7 +192,17 @@ const launch = async receipt => {
   }
   console.log(JSON.stringify({ phase: 'ready', ...launches.at(-1) }))
 }
-const close = async () => { await app?.close(); app = undefined }
+const close = async () => {
+  const current = app
+  if (!current) return
+  let timeout
+  try {
+    await Promise.race([current.close(), new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('The isolated client did not close within 20 seconds')), 20000)
+    })])
+    app = undefined
+  } finally { clearTimeout(timeout) }
+}
 const request = (path, body) => page.evaluate(async ({ path, body }) => {
   const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST',
     ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) })
@@ -371,7 +381,7 @@ try {
       const cachedInstaller = join(pending, pendingInfo.fileName)
       const cachedDigest = createHash('sha512').update(readFileSync(cachedInstaller)).digest('base64')
       assert.equal(cachedDigest, pendingInfo.sha512)
-      await app.close(); app = undefined
+      await close()
       // Run the real NSIS Cancel flow against an identical disposable copy.
       // The updater's original pending file must remain the exact byte source
       // for the subsequent reopen/retry path.
@@ -547,6 +557,15 @@ try {
   throw error
 } finally {
   unrelatedProcess?.kill()
-  await close()
-  await new Promise(resolve => gateway.close(resolve))
+  try { await close() }
+  catch (error) {
+    // This is cleanup after acceptance failed, never proof of a successful
+    // updater handoff. Kill only the process launched by this isolated driver.
+    console.error(error)
+    app?.process().kill()
+    throw error
+  } finally {
+    gateway.closeAllConnections()
+    await new Promise(resolve => gateway.close(resolve))
+  }
 }

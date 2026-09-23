@@ -34,6 +34,12 @@ async function run(exe, args, name, overrides = {}) {
   const output = createWriteStream(log)
   const child = spawn(exe, args, { cwd: root, env: { ...env, ...overrides }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   child.stdout.pipe(output, { end: false }); child.stderr.pipe(output, { end: false })
+  // Native acceptance uses only synthetic accounts. Stream its evidence so a
+  // failing cleanup cannot hide the actual fault until the job-level timeout.
+  if (name === 'native-updater' || name === 'legacy-migration') {
+    child.stdout.pipe(process.stderr, { end: false })
+    child.stderr.pipe(process.stderr, { end: false })
+  }
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve) })
   await new Promise(resolve => output.end(resolve))
   if (code !== 0) throw new Error(`${name} failed (${code}); ${log}\n${readFileSync(log, 'utf8').slice(-6000)}`)

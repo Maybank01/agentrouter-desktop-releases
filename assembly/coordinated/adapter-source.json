@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "a1a65311f8b9a95d0ccb8c705dd3a7f60836ac63",
+  "commit": "dc41aee43dfc367deb0366d0a4c3c4a64e2a86c7",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 36267,
-      "sha256": "13aac7d55cd991a2f56e19025673ba38c550c79fe6435c80695ae246d09e4970"
+      "bytes": 36831,
+      "sha256": "e8f0654b0e8651c874a0356e1961c212b8b655ab8ef7fd414202a60b60565f62"
     },
     {
       "path": "agentrouter-icon.svg",
@@ -37,8 +37,8 @@
     },
     {
       "path": "installer-acceptance.mjs",
-      "bytes": 9827,
-      "sha256": "3bca6315da6d4aef58e89236f5b56b863b2c9423805e0f486ec834f57a9b95d2"
+      "bytes": 10162,
+      "sha256": "fd00a83d6c69a2ba20da95425ca25cfea4a2ec4284786c81be0f7527430e6df5"
     },
     {
       "path": "installer-baseline.json",
@@ -77,8 +77,8 @@
     },
     {
       "path": "store-migration-acceptance.mjs",
-      "bytes": 12842,
-      "sha256": "26831c4f89681a99b742110dafcffb96f1ad9e76807651eacaad2afdd7ce2edd"
+      "bytes": 13718,
+      "sha256": "b79642382aaceaaa776e97fcf41f865218ec2cbf75423128920c488a356c6917"
     },
     {
       "path": "test.mjs",

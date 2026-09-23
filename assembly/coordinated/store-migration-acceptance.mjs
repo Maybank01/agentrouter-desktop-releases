@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { load, dump } from 'js-yaml'
@@ -86,11 +86,21 @@ const inventory = Object.entries(snapshot(seed))
 writeJson(join(seed, 'integrity.json'), { schemaVersion: 2, files: inventory })
 
 const trace = join(base, 'pnpm-trace.jsonl')
+const activeCommand = join(base, 'pnpm-active.json')
+let scenario = 'seed-ready'
+const watchdog = process.env.GITHUB_ACTIONS === 'true' ? setTimeout(() => {
+  console.error(JSON.stringify({ failed: true, phase: 'store-migration-timeout', scenario,
+    command: existsSync(activeCommand) ? json(activeCommand) : undefined,
+    completedCommands: existsSync(trace) ? readFileSync(trace, 'utf8').slice(-12000) : undefined }))
+  process.exit(1)
+}, 300000) : undefined
+watchdog?.unref()
 const recordingPnpm = join(base, 'recording-pnpm.mjs')
 writeFileSync(recordingPnpm, `
 import { spawnSync } from 'node:child_process'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 const args = process.argv.slice(2)
+writeFileSync(${JSON.stringify(activeCommand)}, JSON.stringify({ startedAt: new Date().toISOString(), args, pid: process.pid }))
 const result = spawnSync(process.execPath, [${JSON.stringify(pnpm11)}, ...args], { env: process.env,
   cwd: process.cwd(), encoding: 'utf8', windowsHide: true, timeout: 180000, maxBuffer: 4 * 1024 * 1024 })
 appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ args, status: result.status,
@@ -100,6 +110,8 @@ process.stderr.write(result.stderr ?? '')
 process.exit(result.status ?? 1)
 `)
 const oldProfile = name => {
+  scenario = name
+  console.error(JSON.stringify({ phase: 'store-migration-scenario', scenario }))
   const home = join(base, name)
   const paths = resolveDesktopPaths(home)
   metadata(paths.profile, '3.0.2')
@@ -120,7 +132,7 @@ const oldProfile = name => {
   return { paths, protectedRoot, protectedBefore: snapshot(protectedRoot), oldModules: modules,
     manager: new DesktopProjectManager(paths, { node: process.execPath, pnpm: recordingPnpm }) }
 }
-const hooks = () => ({ healthCheck: async project => {
+const hooks = () => ({ progress: async stage => { console.error(JSON.stringify({ phase: 'store-migration-progress', scenario, stage })) }, healthCheck: async project => {
   assert.equal(json(join(project, 'node_modules', thirdParty.name, 'package.json')).version, thirdParty.version)
   assert.match(load(readFileSync(join(project, 'node_modules/.modules.yaml'), 'utf8')).packageManager, /^pnpm@11\./)
 }, beforeActivate: async () => {}, afterActivate: async () => {} })
@@ -199,4 +211,5 @@ const receipt = { passed: true, verifiedAt: new Date().toISOString(), platform: 
   thirdPartyAndConfigurationPreserved: true, syntheticDataPreserved: true, retrySucceeds: true,
   personalHomeUsed: false, publicFeedsChanged: false }
 writeJson(join(base, 'acceptance.json'), receipt)
+clearTimeout(watchdog)
 console.log(JSON.stringify({ ...receipt, output: base }))
