@@ -78,6 +78,7 @@ await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${gateway.address().port}`
 let app, page
 const launches = []
+const debuggerDetachWait = new WeakSet()
 let nativeUpdateMetrics
 let unrelatedProcess
 let externalBrowserNavigation = false
@@ -86,7 +87,13 @@ const launch = async receipt => {
   console.log(JSON.stringify({ phase: 'launching', productVersion: receipt.input.productVersion }))
   app = await _electron.launch({ executablePath: receipt.executable,
     args: ['--lang=zh-CN', ...(!nativeUpdate ? [`--user-data-dir=${electronHome}`] : [])], cwd: state, env, timeout: 180000 })
-  app.process().stderr.on('data', bytes => writeFileSync(join(state, 'electron.log'), bytes, { flag: 'a' }))
+  const launched = app
+  app.process().stderr.on('data', bytes => {
+    writeFileSync(join(state, 'electron.log'), bytes, { flag: 'a' })
+    // Node prints this after the main process finished quitting while the
+    // Playwright inspector session is still attached; see close().
+    if (String(bytes).includes('Waiting for the debugger to disconnect')) debuggerDetachWait.add(launched)
+  })
   // The preceding Electron 43 host must finish initializing its main process
   // before Playwright evaluates Electron's module handle.
   page = await app.firstWindow({ timeout: 180000 })
@@ -206,6 +213,17 @@ const close = async () => {
       timeout = setTimeout(() => reject(new Error('The isolated client did not close within 20 seconds')), 20000)
     })])
     app = undefined
+  } catch (error) {
+    // Only the harness deadlock is tolerated: the product already quit and its
+    // Node runtime waits for Playwright's inspector, while Playwright waits for
+    // the exit. Any other slow quit remains a failure.
+    if (!debuggerDetachWait.has(current)) throw error
+    const child = current.process()
+    const exited = child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : once(child, 'exit')
+    child.kill()
+    await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(error), 10000))])
+    app = undefined
+    console.log(JSON.stringify({ phase: 'debugger-detach-deadlock-resolved', pid: child.pid }))
   } finally { clearTimeout(timeout) }
 }
 const request = (path, body) => page.evaluate(async ({ path, body }) => {
