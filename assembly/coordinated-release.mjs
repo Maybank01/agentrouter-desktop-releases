@@ -10,6 +10,7 @@ import { verifyCoordinatedPublicRelease } from './coordinated-public.mjs'
 import { loadSigningPolicy, inspectWindowsSignature } from './coordinated/windows-signing.mjs'
 import { manifestName, verifyUpdateManifest, verifyUpdateFile } from './coordinated/update-signature.mjs'
 import { localInputs, verifyRecordedEvidence } from './coordinated-evidence.mjs'
+import { runDraftTag } from './run-drafts.mjs'
 import { currentRun, evaluateJobs } from './release-timeline.mjs'
 import { assertLatestForward, composeFinalReceipt, finalReceiptName, planDraftStaging, readReleaseReceipt, releaseProfileRecord,
   signedRecords, stagedReceiptName, validateSignedRecord, validateStagedReceipt } from './coordinated-signed.mjs'
@@ -29,8 +30,6 @@ const input = json(join(adapter, 'release.json'))
 const policy = input.signing?.mode === 'self-signed' ? loadSigningPolicy() : undefined
 if (policy) assert.equal(input.signing.certificateSha256, policy.certificateSha256)
 assert.equal(input.candidateOnly, false, 'The reviewed product release is still candidate-only')
-const tag = `v${input.productVersion}`
-assert.match(tag, /^v\d+\.\d+\.\d+$/)
 const source = json(join(adapter, 'adapter-source.json'))
 const patchSha256 = hash(readFileSync(join(adapter, 'coordinated-delivery.patch')))
 const phase = process.argv[2]
@@ -40,6 +39,16 @@ const releaseSource = process.env.AGENTROUTER_STAGED_SOURCE_SHA ?? process.env.G
 const releaseRun = process.env.AGENTROUTER_STAGED_RUN_ID ?? process.env.GITHUB_RUN_ID
 assert.match(releaseSource ?? '', /^[a-f0-9]{40}$/)
 assert.match(releaseRun ?? '', /^[1-9][0-9]*$/)
+// A signed rehearsal stages the exact product bytes as a prerelease draft under
+// rehearsal-<run>, which is not a version tag: it can never become latest, and
+// publication is refused. The same run deletes it.
+const rehearsal = process.env.AGENTROUTER_REHEARSAL === '1'
+if (rehearsal) {
+  assert.equal(process.env.AGENTROUTER_STAGED_RUN_ID, undefined, 'A rehearsal is never resumed')
+  assert.notEqual(phase, 'publish', 'A signed rehearsal is never published')
+}
+const tag = rehearsal ? runDraftTag('rehearsal', releaseRun) : `v${input.productVersion}`
+assert.match(tag, rehearsal ? /^rehearsal-\d+$/ : /^v\d+\.\d+\.\d+$/)
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 })
 const workflowRun = () => ({ id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT, commit: process.env.GITHUB_SHA })
 if (releaseSource !== process.env.GITHUB_SHA) {
@@ -77,7 +86,7 @@ function remoteRelease() {
   assert.ok(Number.isSafeInteger(identity.databaseId) && identity.databaseId > 0)
   const remote = JSON.parse(gh(['api', `repos/${repo}/releases/${identity.databaseId}`]))
   assert.equal(remote.tag_name, tag)
-  assert.equal(remote.prerelease, false)
+  assert.equal(remote.prerelease, rehearsal)
   return remote
 }
 /** Verify downloaded draft bytes against the staged receipt before any post-sign check. */
@@ -146,7 +155,7 @@ if (phase === 'stage') {
     workflowRun: { workflow: '.github/workflows/release.yml', id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT },
     adapterSource: source, input, selection, upstreamCommit: installer.upstreamCommit, patchSha256, signed: true, testOnly: false,
     signing: installer.signing, signature: installer.signature, runtimeSignature: installer.runtimeSignature,
-    assets: installer.assets, releaseProfile, ...preSign }
+    assets: installer.assets, releaseProfile, ...(rehearsal ? { rehearsal: true } : {}), ...preSign }
   validateStagedReceipt(receipt, { sourceCommit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID })
   const output = installer.output
   const receiptPath = join(output, stagedReceiptName)
@@ -163,6 +172,15 @@ if (phase === 'stage') {
   await verifySignedAssets(output, installer)
   verifySignature(installer.installer)
   const tagRefs = JSON.parse(gh(['api', `repos/${repo}/git/matching-refs/tags/${tag}`]))
+  if (rehearsal) {
+    assert.equal(tagRefs.length, 0, `${tag} already exists`)
+    assert.equal(listReleases().some(release => release.tag_name === tag), false, `${tag} already exists`)
+    gh(['release', 'create', tag, ...installer.assets.map(file => join(output, file.name)), receiptPath, checksums,
+      '--repo', repo, '--target', process.env.GITHUB_SHA, '--draft', '--prerelease',
+      '--title', `Rehearsal of AgentRouter ${input.productVersion} (run ${releaseRun}, never published)`, '--notes-file', notes])
+    console.log(JSON.stringify({ tag, staged: true, published: false, rehearsal: true }))
+    process.exit(0)
+  }
   const plan = planDraftStaging({ tag, releases: listReleases(), tagRefExists: tagRefs.some(ref => ref.ref === `refs/tags/${tag}`) })
   for (const id of plan.replaceDraftIds) {
     // Only a never-published draft of this version; recheck immediately before deletion.
@@ -208,7 +226,15 @@ if (phase === 'stage') {
   const { receipt, installer, executable, signature, signedManifest } = await loadSignedRelease(path)
   const work = mkdtempSync(join(process.env.RUNNER_TEMP, 'agentrouter-signed-'))
   const installed = join(work, 'installed')
-  const testEnv = { ...process.env, AGENTROUTER_TEST_INSTALLER: executable, AGENTROUTER_TEST_INSTALL_DIR: installed }
+  // The installer materializes the runtime in the Home it runs with. Install into
+  // the same isolated acceptance Home the first launch uses, so the first-launch
+  // budget (no rebuild, usable within 15 s) is enforced rather than only logged.
+  const acceptanceRoot = join(root, '.local/coordinated/acceptance')
+  mkdirSync(acceptanceRoot, { recursive: true })
+  const acceptanceState = mkdtempSync(join(acceptanceRoot, 'signed-'))
+  const acceptanceHome = join(acceptanceState, 'home')
+  const testEnv = { ...process.env, AGENTROUTER_TEST_INSTALLER: executable, AGENTROUTER_TEST_INSTALL_DIR: installed,
+    DSH_HOME: acceptanceHome, DSH_TELEMETRY_DISABLED: '1' }
   delete testEnv.GH_TOKEN; delete testEnv.GITHUB_TOKEN
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     '$p = Start-Process -FilePath $env:AGENTROUTER_TEST_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:AGENTROUTER_TEST_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "NSIS failed: $($p.ExitCode)" }'],
@@ -226,10 +252,16 @@ if (phase === 'stage') {
   const output = join(work, 'evidence'); mkdirSync(output)
   const candidate = join(work, 'installed.json')
   writeJson(candidate, { input, executable: installedExe, output, pluginSha256: input.plugin.sha256, patchSha256 })
+  const preparation = JSON.parse(readFileSync(join(acceptanceHome, 'desktop/installer-prepare.json'), 'utf8'))
+  assert.equal(preparation.outcome, 'installed', 'The signed installer must materialize the runtime before the first launch')
+  const acceptanceEnv = { ...testEnv, AGENTROUTER_ACCEPTANCE_STATE: acceptanceState }
+  delete acceptanceEnv.DSH_HOME
   const acceptedOutput = execFileSync(process.execPath, [join(adapter, 'acceptance.mjs'), candidate],
-    { env: testEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, timeout: 600000 })
+    { env: acceptanceEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, timeout: 600000 })
   const acceptance = JSON.parse(acceptedOutput.trim().split(/\r?\n/).at(-1))
   assert.equal(acceptance.passed, true)
+  assert.ok(acceptance.startupBudgets?.some(budget => budget.kind === 'firstLaunch'),
+    'The signed fresh install must measure its first launch against the budget')
   const record = { ...acceptance, kind: 'fresh-install', installerExecuted: true, signedInstallerSha256: installer.sha256,
     signature, signing: input.signing, sourceCommit: releaseSource, workflowRun: { id: releaseRun },
     verifierRun: workflowRun(), verifierCommit: process.env.GITHUB_SHA, input, patchSha256 }
@@ -237,6 +269,7 @@ if (phase === 'stage') {
   writeJson(join(path, signedRecords['fresh-install']), record)
   console.log(JSON.stringify({ tag, acceptedSignedInstaller: true }))
 } else if (phase === 'publish') {
+  assert.equal(rehearsal, false, 'A signed rehearsal is never published')
   const { name, receipt: downloaded, installer } = await loadSignedRelease(path)
   const remote = remoteRelease()
   for (const file of downloaded.assets) {

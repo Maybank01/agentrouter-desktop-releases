@@ -15,6 +15,7 @@ import { assertCredentialRecovery } from './credential-recovery-acceptance.mjs'
 import { assertRuntimeRecovery } from './runtime-recovery-acceptance.mjs'
 import { readInstalledProductVersion } from './installed-version.mjs'
 import { observeInstalledProcessExit } from './installed-process.mjs'
+import { runInstall } from './install-retry.mjs'
 
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const legacyExecutable = process.argv.find(value => value.startsWith('--legacy-executable='))?.slice('--legacy-executable='.length)
@@ -366,10 +367,12 @@ const prepareLegacyMigrationCases = async profile => {
   for (const name of Object.keys(commandEnv)) if (/^(?:npm|pnpm|corepack)_/i.test(name)) delete commandEnv[name]
   const npmrc = join(state, 'legacy-npmrc')
   writeFileSync(npmrc, 'registry=https://registry.npmjs.org/\n')
-  execFileSync(process.execPath, [join(directory, 'node_modules/pnpm10/bin/pnpm.cjs'),
+  // Lockfile-only resolution of a fixed tarball is idempotent: repeat it once on
+  // a native fail-fast (0xC0000409) exit, as seed installs do.
+  runInstall(process.execPath, [join(directory, 'node_modules/pnpm10/bin/pnpm.cjs'),
     `--config.store-dir=${join(state, 'legacy-pnpm-store')}`, `--config.userconfig=${npmrc}`,
     'add', tarball, '--save-exact', '--lockfile-only', '--ignore-scripts', '--ignore-pnpmfile'],
-  { cwd: profile, env: commandEnv, encoding: 'utf8', windowsHide: true, timeout: 180000, maxBuffer: 8 * 1024 * 1024 })
+  { cwd: profile, env: commandEnv, timeout: 180000 }, { label: 'Legacy profile lockfile resolution' })
   const manifestPath = join(profile, 'package.json')
   const manifest = json(manifestPath)
   assert.match(manifest.dependencies[viewer], /^file:/)

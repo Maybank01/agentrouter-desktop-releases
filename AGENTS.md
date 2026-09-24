@@ -47,7 +47,13 @@ do not install trusted roots, and label the release self-signed rather than
 publicly trusted. Native signed upgrade, signed legacy migration and separate
 clean installation of the same final bytes are mandatory before publishing.
 Unsigned or signed loopback test installers are never promoted or uploaded as
-release assets. Release acceptance may reuse a successful same-repository
+release assets. The one exception is transport inside a single release run: the signed
+loopback native-update baseline travels as the never-published draft
+`baseline-<run>` (visible to repository writers only, never a product asset or
+feed), is re-verified by digest and Authenticode, and is deleted by the same run.
+`rehearse_signed` stages the product as the prerelease draft `rehearsal-<run>`;
+it can never become latest or be published and is deleted by the same run.
+Release acceptance may reuse a successful same-repository
 ci.yml run only when its installed-acceptance input digest equals the release
 commit's (`assembly/coordinated-evidence.mjs`); otherwise it repeats candidate
 acceptance. A changed package or installer of a published version requires a
