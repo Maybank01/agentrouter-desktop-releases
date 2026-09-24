@@ -9,6 +9,7 @@
     "Signed native update and restart": 12,
     "Signed legacy Profile migration": 10,
     "Install signed bytes on a clean worker": 8,
+    "Verify the signed feed with published client verifiers": 5,
     "Publish the accepted signed release and verify delivery": 5,
     "Remove this run's never-published drafts": 2
   },
