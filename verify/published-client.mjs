@@ -93,7 +93,11 @@ async function launch(executable, label) {
   while (!page && Date.now() < deadline) {
     for (const candidate of browser.contexts().flatMap(context => context.pages())) {
       current = candidate
-      if (candidate.url().startsWith('dsh-app://app') && await candidate.getByRole('button', { name: /^(设置|Settings)$/ }).first().isVisible().catch(() => false)) { page = candidate; break }
+      await candidate.setViewportSize({ width: 1280, height: 860 }).catch(() => {})
+      if (!candidate.url().startsWith('dsh-app://app')) continue
+      const composer = candidate.locator('textarea, [contenteditable="true"], [role="textbox"]').first()
+      const settings = candidate.locator('[aria-label*="设置"], [aria-label*="Settings"], [title*="设置"]').first()
+      if (await composer.isVisible().catch(() => false) || await settings.isVisible().catch(() => false)) { page = candidate; break }
     }
     if (!page) await sleep(250)
   }
@@ -112,7 +116,6 @@ async function launch(executable, label) {
   }
   log('launch', { label, pid: child.pid, usableMs, startup: startup && { productVersion: startup.productVersion, visibleMs: startup.visibleMs, durationMs: startup.durationMs,
     rebuilt: startup.rebuilt, preparedRuntime: startup.preparedRuntime, stages: startup.events?.map(event => event.stage) } })
-  await page.setViewportSize({ width: 1280, height: 860 }).catch(() => {})
   return { browser, page, usableMs, startup }
 }
 
@@ -139,7 +142,7 @@ async function openAbout(page) {
     const entry = page.locator('.aru-entry button')
     if (await entry.isVisible().catch(() => false)) await entry.click().catch(() => {})
     else {
-      await page.getByRole('button', { name: /^(设置|Settings)$/ }).first().click({ timeout: 3000 }).catch(() => {})
+      await page.getByRole('button', { name: /^(设置|Settings)$/ }).or(page.locator('[aria-label*="设置"], [aria-label*="Settings"], [title*="设置"]')).first().click({ timeout: 3000 }).catch(() => {})
       await page.getByRole('button', { name: '关于与更新', exact: true }).first().click({ timeout: 3000 }).catch(() => {})
     }
     await sleep(750)
