@@ -1,0 +1,143 @@
+name: Desktop staged rollout
+
+# Signs rollout.json (staged rollout / kill switch read by clients >= 3.0.21)
+# with the pinned update key and commits it to the desktop-rollout branch.
+# Clients <= 3.0.20 ignore it and always follow latest.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Product version the rollout applies to (X.Y.Z; may be staged before publication)
+        type: string
+        required: true
+      percent:
+        description: Share of >= 3.0.21 installations offered this version (integer 0..100)
+        type: string
+        default: '100'
+      paused:
+        description: Kill switch; hold this version back from every >= 3.0.21 client
+        type: boolean
+        default: false
+      dry_run:
+        description: Sign and verify only; do not commit to desktop-rollout
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: desktop-rollout
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    name: Sign and verify rollout.json
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    environment: windows-signing
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      rollout: ${{ steps.envelope.outputs.rollout }}
+    env:
+      ROLLOUT_VERSION: ${{ inputs.version }}
+      ROLLOUT_PERCENT: ${{ inputs.percent }}
+      ROLLOUT_PAUSED: ${{ inputs.paused }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - name: Build the payload from the operator input
+        run: node assembly/rollout.mjs payload --out .local/rollout/payload.json
+      - name: Import the reviewed self-signed key without changing Windows root trust
+        shell: pwsh
+        env:
+          AGENTROUTER_SIGNING_PFX: ${{ secrets.AGENTROUTER_SIGNING_PFX }}
+          AGENTROUTER_SIGNING_PASSWORD: ${{ secrets.AGENTROUTER_SIGNING_PASSWORD }}
+        run: ./assembly/coordinated/import-signing-key.ps1
+      - name: Sign the payload with the pinned update key
+        shell: pwsh
+        run: |
+          $env:AGENTROUTER_SIGNING_MANIFEST_INPUT = (Resolve-Path .local/rollout/payload.json).Path
+          $env:AGENTROUTER_SIGNING_MANIFEST_OUTPUT = Join-Path (Resolve-Path .local/rollout).Path 'payload.sig'
+          powershell.exe -NoProfile -NonInteractive -File ./assembly/coordinated/sign-manifest.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Signing the rollout payload failed' }
+      - name: Compose rollout.json and verify it against windows-signing.json
+        id: envelope
+        shell: pwsh
+        run: |
+          node assembly/rollout.mjs envelope --payload .local/rollout/payload.json --signature .local/rollout/payload.sig --out .local/rollout/rollout.json
+          if ($LASTEXITCODE -ne 0) { throw 'rollout.json did not verify' }
+          node assembly/rollout.mjs verify .local/rollout/rollout.json
+          if ($LASTEXITCODE -ne 0) { throw 'rollout.json did not verify' }
+          "rollout=$([Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path .local/rollout/rollout.json).Path)))" >> $env:GITHUB_OUTPUT
+      - name: Record a dry run
+        if: inputs.dry_run
+        shell: pwsh
+        run: |
+          "`nDry run: signed and verified; desktop-rollout was not changed.`n" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content .local/rollout/rollout.json
+      - name: Remove the temporary signing key
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:AGENTROUTER_SIGNING_CERT_THUMBPRINT -match '^[A-Fa-f0-9]{40}$') {
+            $key = "Cert:/CurrentUser/My/$env:AGENTROUTER_SIGNING_CERT_THUMBPRINT"
+            if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -DeleteKey -Force }
+          }
+
+  publish:
+    name: Commit rollout.json to desktop-rollout
+    needs: sign
+    if: ${{ !inputs.dry_run && needs.sign.result == 'success' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      ROLLOUT_VERSION: ${{ inputs.version }}
+      ROLLOUT_PERCENT: ${{ inputs.percent }}
+      ROLLOUT_PAUSED: ${{ inputs.paused }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - name: Re-verify the signed file before committing it
+        env:
+          ROLLOUT_BASE64: ${{ needs.sign.outputs.rollout }}
+        run: |
+          mkdir -p .local/rollout
+          printf '%s' "$ROLLOUT_BASE64" | base64 -d > .local/rollout/rollout.json
+          node assembly/rollout.mjs verify .local/rollout/rollout.json
+      - name: Commit rollout.json to desktop-rollout (created as an orphan branch when missing)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic" GIT_TERMINAL_PROMPT=0
+          work="$RUNNER_TEMP/desktop-rollout"
+          git init -q "$work"
+          cd "$work"
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          if git fetch -q --depth 1 origin refs/heads/desktop-rollout:refs/remotes/origin/desktop-rollout; then
+            git checkout -q -b desktop-rollout origin/desktop-rollout
+          else
+            git checkout -q --orphan desktop-rollout
+          fi
+          cp "$GITHUB_WORKSPACE/.local/rollout/rollout.json" rollout.json
+          echo 'Signed AgentRouter Desktop staged-rollout state; written only by .github/workflows/rollout.yml on main (see assembly/COORDINATED-RELEASE.md).' > README.md
+          git add rollout.json README.md
+          git -c user.name='agentrouter-release[bot]' -c user.email='agentrouter-release[bot]@users.noreply.github.com' \
+            commit -q -m "rollout: $ROLLOUT_VERSION at $ROLLOUT_PERCENT% (paused=$ROLLOUT_PAUSED, run $GITHUB_RUN_ID)"
+          git push origin HEAD:refs/heads/desktop-rollout
+          echo "Committed $(git rev-parse HEAD) to desktop-rollout: https://raw.githubusercontent.com/$GITHUB_REPOSITORY/desktop-rollout/rollout.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Report whether the website mirror serves identical bytes (report only)
+        run: node assembly/rollout.mjs mirror .local/rollout/rollout.json
