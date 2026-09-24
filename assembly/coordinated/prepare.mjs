@@ -39,6 +39,7 @@ export function prepareSource() {
   copyFileSync(join(directory, 'runtime-recovery.mjs'), join(source, 'apps/desktop/src/agentrouter-runtime-recovery.mjs'))
   copyFileSync(join(directory, 'update-runtime.mjs'), join(source, 'apps/desktop/src/agentrouter-update-runtime.mjs'))
   copyFileSync(join(directory, 'update-transport.mjs'), join(source, 'apps/desktop/src/agentrouter-update-transport.mjs'))
+  copyFileSync(join(directory, 'update-rollout.mjs'), join(source, 'apps/desktop/src/agentrouter-update-rollout.mjs'))
   copyFileSync(join(directory, 'release-history.json'), join(source, 'apps/desktop/src/agentrouter-release-history.json'))
   const changes = git(source, 'diff', '--name-only').split('\n')
   assert.ok(changes.length > 0 && changes.every(path => path.startsWith('apps/desktop/') || path === 'apps/desktop-host/src/index.ts'))

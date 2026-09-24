@@ -105,6 +105,9 @@ function verificationError(code, cause) {
 function pinnedUpdateVerification(config, getVersion, fetcher) {
   validateSigningPolicy(config.policy)
   const feed = validateUpdateFeed(config.feed, config.testOnly)
+  // Node's global fetch ignores the Windows system proxy and PAC. <=3.0.19 used it
+  // here and could not verify updates where GitHub is reachable only via a proxy.
+  assert.equal(typeof fetcher, 'function', 'Signed update metadata requires an explicit (Electron session) fetcher')
   let selectedVersion, manifestPromise
   const prepare = async () => {
     const version = getVersion()
@@ -150,12 +153,12 @@ function pinnedUpdateVerification(config, getVersion, fetcher) {
   return { prepare, verifyFile, hook }
 }
 
-export function createPinnedUpdateVerifier(config, getVersion, fetcher = fetch) {
+export function createPinnedUpdateVerifier(config, getVersion, fetcher) {
   return pinnedUpdateVerification(config, getVersion, fetcher).hook
 }
 
 /** Guard both the updater's normal path and its existing-download cache path. */
-export function configurePinnedUpdater(updater, config, getVersion, fetcher = fetch) {
+export function configurePinnedUpdater(updater, config, getVersion, fetcher) {
   assert.equal(typeof updater.verifyUpdateCodeSignature, 'function', 'The installed updater lacks its signature-verifier interface')
   const verification = pinnedUpdateVerification(config, getVersion, fetcher)
   const verifier = verification.hook

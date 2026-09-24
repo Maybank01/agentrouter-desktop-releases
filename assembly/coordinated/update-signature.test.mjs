@@ -56,9 +56,11 @@ test('existing download cache is verified again and cannot bypass a missing publ
 })
 
 test('HTTP is restricted to an explicit packaged loopback test feed', () => {
-  assert.throws(() => createPinnedUpdateVerifier({ ...config, feed: 'http://example.test/' }, () => '3.0.7'))
-  assert.throws(() => createPinnedUpdateVerifier({ ...config, feed: 'http://127.0.0.1:4567/' }, () => '3.0.7'))
-  assert.doesNotThrow(() => createPinnedUpdateVerifier({ ...config, feed: 'http://127.0.0.1:4567/', testOnly: true }, () => '3.0.7'))
+  assert.throws(() => createPinnedUpdateVerifier({ ...config, feed: 'http://example.test/' }, () => '3.0.7', fetcher))
+  assert.throws(() => createPinnedUpdateVerifier({ ...config, feed: 'http://127.0.0.1:4567/' }, () => '3.0.7', fetcher))
+  assert.doesNotThrow(() => createPinnedUpdateVerifier({ ...config, feed: 'http://127.0.0.1:4567/', testOnly: true }, () => '3.0.7', fetcher))
+  // No implicit Node global fetch: it ignores the system proxy.
+  assert.throws(() => createPinnedUpdateVerifier(config, () => '3.0.7'), /explicit/)
 })
 
 test('one authenticated manifest serves the signature hook, cache check and restart even when latest moves or goes offline', async () => {

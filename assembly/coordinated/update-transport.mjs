@@ -17,6 +17,8 @@ const ASSET = /^https:\/\/github\.com\/Maybank01\/agentrouter-desktop-releases\/
 const VERSIONED_FILE = /^AgentRouter-(\d+\.\d+\.\d+)-x64-Setup\.exe(?:\.blockmap)?$/
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000]
 const PROGRESS_BYTES = 1024 * 1024
+// A blackholed connection (no bytes, no error) is aborted and retried from the retained offset.
+const STALL_MS = 60000
 
 /**
  * Candidate URLs for one release file: the mirror's immutable version directory
@@ -42,24 +44,30 @@ function interrupted(cause, transferred) {
     { code: 'UPDATE_DOWNLOAD_INTERRUPTED', transferred })
 }
 
-async function sha512Of(path) {
-  const hash = createHash('sha512')
+async function digestOf(path, algorithm, encoding) {
+  const hash = createHash(algorithm)
   for await (const chunk of createReadStream(path)) hash.update(chunk)
-  return hash.digest('base64')
+  return hash.digest(encoding)
 }
 
 /**
  * Download one file to `destination`, resuming a retained partial file.
  * @param options.sources - URLs tried in order; a failing source yields to the next.
  * @param options.sha512 - expected base64 SHA-512 from the verified feed.
+ * @param options.sha256 - alternatively, expected hex SHA-256 (e.g. from the signed manifest).
  * @param options.size - expected size in bytes, when the feed provides it.
  * @param options.partialDir - persistent directory for partial files (kept across restarts).
  */
-export async function resumableDownload({ sources, destination, sha512, size, partialDir, fetcher = fetch,
-  onProgress, isCancelled = () => false, delays = RETRY_DELAYS_MS, now = Date.now, wait = sleep }) {
-  if (typeof sha512 !== 'string' || !/^[A-Za-z0-9+/]+=*$/.test(sha512)) throw new Error('A resumable download requires the expected SHA-512')
+export async function resumableDownload({ sources, destination, sha512, sha256, size, partialDir, fetcher,
+  onProgress, isCancelled = () => false, delays = RETRY_DELAYS_MS, now = Date.now, wait = sleep, stallMs = STALL_MS }) {
+  const expected = typeof sha512 === 'string' && /^[A-Za-z0-9+/]+=*$/.test(sha512) ? { value: sha512, algorithm: 'sha512', encoding: 'base64' }
+    : typeof sha256 === 'string' && /^[a-f0-9]{64}$/.test(sha256) ? { value: sha256, algorithm: 'sha256', encoding: 'hex' } : undefined
+  if (!expected) throw new Error('A resumable download requires the expected SHA-512 or SHA-256')
+  const complete = async () => await digestOf(partial, expected.algorithm, expected.encoding) === expected.value
+  // Node's global fetch ignores the Windows system proxy; the app passes Electron's session fetch.
+  if (typeof fetcher !== 'function') throw new Error('A resumable download requires an explicit (Electron session) fetcher')
   mkdirSync(partialDir, { recursive: true })
-  const partial = join(partialDir, createHash('sha256').update(sha512).digest('hex').slice(0, 32) + '.part')
+  const partial = join(partialDir, createHash('sha256').update(expected.value).digest('hex').slice(0, 32) + '.part')
   // Partials of other releases are obsolete once a new download starts.
   for (const name of await readdir(partialDir)) if (name.endsWith('.part') && join(partialDir, name) !== partial) await rm(join(partialDir, name), { force: true })
   let offset = existsSync(partial) ? statSync(partial).size : 0
@@ -69,21 +77,24 @@ export async function resumableDownload({ sources, destination, sha512, size, pa
   for (;;) {
     if (isCancelled()) throw Object.assign(new Error('cancelled'), { name: 'CancellationError' })
     if (Number.isSafeInteger(size) && offset === size) {
-      if (await sha512Of(partial) === sha512) break
+      if (await complete()) break
       await rm(partial, { force: true }); offset = 0
       if (restartedAfterMismatch) throw Object.assign(new Error('Downloaded update does not match its checksum'), { code: 'UPDATE_FILE_INVALID' })
       restartedAfterMismatch = true
     }
     const url = sources[source % sources.length]
     let progressed = 0
+    const controller = new AbortController()
+    let stall
+    const watch = () => { clearTimeout(stall); stall = setTimeout(() => controller.abort(new Error('The connection stalled')), stallMs) }
     try {
-      const controller = new AbortController()
+      watch()
       const response = await fetcher(url, { headers: offset > 0 ? { Range: `bytes=${offset}-` } : {},
         redirect: 'follow', signal: controller.signal })
       if (response.status === 416 && offset > 0) {
         // The retained bytes already cover the file; verify them.
         response.body?.cancel?.().catch?.(() => {})
-        if (await sha512Of(partial) === sha512) break
+        if (await complete()) break
         await rm(partial, { force: true }); offset = 0
         throw new Error('Retained partial download is invalid')
       }
@@ -101,6 +112,7 @@ export async function resumableDownload({ sources, destination, sha512, size, pa
         let reported = 0
         for await (const chunk of response.body) {
           if (isCancelled()) { controller.abort(); throw Object.assign(new Error('cancelled'), { name: 'CancellationError' }) }
+          watch()
           await file.write(chunk)
           offset += chunk.length; progressed += chunk.length; reported += chunk.length
           if (onProgress && (reported >= PROGRESS_BYTES || (total && offset === total))) {
@@ -110,14 +122,15 @@ export async function resumableDownload({ sources, destination, sha512, size, pa
             reported = 0
           }
         }
-      } finally { await file.close() }
+      } finally { clearTimeout(stall); await file.close() }
       // A connection that ends early keeps its bytes for the next attempt.
       if (total !== undefined && offset < total) throw new Error('The connection closed before the file was complete')
-      if (await sha512Of(partial) === sha512) break
+      if (await complete()) break
       await rm(partial, { force: true }); offset = 0
       if (restartedAfterMismatch) throw Object.assign(new Error('Downloaded update does not match its checksum'), { code: 'UPDATE_FILE_INVALID' })
       restartedAfterMismatch = true
     } catch (error) {
+      clearTimeout(stall)
       if (error?.name === 'CancellationError' || error?.code === 'UPDATE_FILE_INVALID') throw error
       // Progress resets the budget: a slow connection that keeps dropping still completes.
       failures = progressed > 0 ? 1 : failures + 1
@@ -149,6 +162,7 @@ export async function withSources(sources, operation, { delays = RETRY_DELAYS_MS
  * @param options.differentialAttempts - differential download attempts before a full download.
  */
 export function installResilientTransport(updater, { fetcher, differentialAttempts = 3, wait = sleep } = {}) {
+  if (typeof fetcher !== 'function') throw new Error('The update transport requires an explicit (Electron session) fetcher')
   const executor = updater.httpExecutor
   if (!executor || typeof executor.download !== 'function') throw new Error('The installed updater lacks its HTTP executor')
   const download = executor.download.bind(executor)
@@ -208,6 +222,7 @@ export function installResilientTransport(updater, { fetcher, differentialAttemp
 
 /** Signed-manifest fetches follow the same order; the manifest's own signature decides trust. */
 export function mirroredFetch(fetcher) {
+  if (typeof fetcher !== 'function') throw new Error('Signed metadata requires an explicit (Electron session) fetcher')
   return (url, init) => withSources(downloadSources(url.href ?? url), async source => {
     const response = await fetcher(source, init)
     if (response.status !== 200) throw new Error(`HTTP ${response.status}`)

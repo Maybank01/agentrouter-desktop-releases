@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { isRuntimeStartupFailure, repairInstallerUrl, runtimeRecoveryDialog, verifyRuntimeExecutables } from './runtime-recovery.mjs'
+import { isRuntimeStartupFailure, prepareRepairInstaller, repairInstallerUrl, runtimeRecoveryDialog, verifyRuntimeExecutables } from './runtime-recovery.mjs'
 
 test('a real executable starts without consulting the system PATH or inherited Node preload', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agentrouter-runtime-'))
@@ -42,6 +42,47 @@ test('runtime recovery keeps cancellation and uses the exact existing product re
     assert.equal(dialog.buttons.length, 3)
     assert.equal(dialog.noLink, true)
   }
-  assert.equal(repairInstallerUrl('3.0.15'), 'https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v3.0.15/AgentRouter-3.0.15-x64-Setup.exe')
+  assert.equal(repairInstallerUrl('3.0.15'), 'https://agentrouter.top/downloads/desktop/v3.0.15/AgentRouter-3.0.15-x64-Setup.exe')
+  assert.equal(runtimeRecoveryDialog(true).buttons[0], '自动修复')
   assert.throws(() => repairInstallerUrl('3.0.15/../../latest'))
+})
+
+test('repair downloads the exact signed release, falls back per source and rejects tampered bytes', async () => {
+  const { createHash, generateKeyPairSync, sign } = await import('node:crypto')
+  const { createServer } = await import('node:http')
+  const { readFile } = await import('node:fs/promises')
+  const { verifyUpdateManifest, verifyUpdateFile } = await import('./update-signature.mjs')
+  const { resumableDownload } = await import('./update-transport.mjs')
+  const keys = generateKeyPairSync('rsa', { modulusLength: 3072 })
+  const policy = { schemaVersion: 1, mode: 'self-signed', publisher: 'AgentRouter', certificateSha256: 'a'.repeat(64),
+    publicKey: keys.publicKey.export({ type: 'spki', format: 'pem' }) }
+  const bytes = Buffer.from('repair installer bytes '.repeat(4096))
+  const name = 'AgentRouter-3.0.21-x64-Setup.exe'
+  const payload = Buffer.from(JSON.stringify({ schemaVersion: 1, productVersion: '3.0.21', certificateSha256: policy.certificateSha256,
+    assets: [{ name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }] }))
+  const envelope = JSON.stringify({ schemaVersion: 1, algorithm: 'RSA-SHA256', payload: payload.toString('base64'),
+    signature: sign('RSA-SHA256', payload, keys.privateKey).toString('base64') })
+  let served = bytes
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push(req.url)
+    if (req.url.startsWith('/mirror/')) { res.writeHead(503); res.end(); return }
+    if (req.url.endsWith('/agentrouter-update.json')) { res.end(envelope); return }
+    if (req.url.endsWith(`/${name}`)) { res.writeHead(200, { 'content-length': served.length }); res.end(served); return }
+    res.writeHead(404); res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const root = await mkdtemp(join(tmpdir(), 'agentrouter-repair-'))
+  const options = { version: '3.0.21', policy, fetcher: fetch, verifyManifest: verifyUpdateManifest, verifyFile: verifyUpdateFile,
+    download: (value) => resumableDownload({ ...value, wait: async () => {}, delays: [0] }), bases: [`${origin}/mirror/`, `${origin}/github/`] }
+  try {
+    const path = await prepareRepairInstaller({ ...options, directory: join(root, 'a') })
+    assert.deepEqual(await readFile(path), bytes)
+    assert.ok(requests.includes('/mirror/v3.0.21/agentrouter-update.json') && requests.includes(`/github/v3.0.21/${name}`))
+    served = Buffer.from(bytes); served[0] ^= 1
+    await assert.rejects(prepareRepairInstaller({ ...options, directory: join(root, 'b') }))
+    await assert.rejects(prepareRepairInstaller({ ...options, directory: join(root, 'c'), version: '3.0.22' }))
+    await assert.rejects(prepareRepairInstaller({ ...options, directory: join(root, 'd'), fetcher: undefined }), /explicit/)
+  } finally { server.close(); await rm(root, { recursive: true, force: true }) }
 })

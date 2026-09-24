@@ -46,7 +46,7 @@ export async function assertRuntimeRecovery({ executablePath, state, home, elect
     const dialog = JSON.parse(stdout.trim())
     assert.equal(dialog.explicitRuntimeFailure, true)
     assert.equal(dialog.cancelled, true)
-    assert.ok(dialog.buttons.some(label => /下载修复安装包|Download repair installer/.test(label)))
+    assert.ok(dialog.buttons.some(label => /自动修复|Repair automatically/.test(label)))
     const [exitCode] = await closed
     assert.equal(exitCode, 1)
     assert.deepEqual(protectedFiles.map(hash), before, 'A broken runtime must not prepare or change the active profile')
