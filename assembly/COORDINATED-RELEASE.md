@@ -172,3 +172,48 @@ publishing runs, opens an incident issue when a job failed or a budget was
 exceeded. The publish job also embeds the timeline in `release-receipt.json`.
 A failed installed acceptance on a main push opens an incident as well, so a
 hotfix published ahead of those suites is never silently unverified.
+
+## Staged rollout and kill switch
+
+Clients >= 3.0.21 read a signed `rollout.json` before offering an update; older
+clients ignore it. The canonical file is `rollout.json` on the orphan branch
+`desktop-rollout` of this repository
+(`https://raw.githubusercontent.com/Maybank01/agentrouter-desktop-releases/desktop-rollout/rollout.json`),
+mirrored at `https://agentrouter.top/downloads/desktop/rollout.json`. It is an
+envelope `{schemaVersion: 1, algorithm: "RSA-SHA256", payload, signature}`: the
+payload is base64 UTF-8 JSON `{schemaVersion: 1, kind: "agentrouter-desktop-rollout",
+productVersion, percent (0..100), paused, issuedAt, certificateSha256}` and the
+signature is RSA-SHA256 PKCS#1 v1.5 over the payload bytes with the same pinned
+key and certificate as `agentrouter-update.json` (`windows-signing.json`).
+
+A client offers version V iff the verified payload's `productVersion` equals V,
+`paused` is false and `bucket < percent`, where
+`bucket = uint32BE(sha256("<installationId>:<V>")[0..4]) % 100`. A file for
+another version, or a missing, invalid or unreachable file, fails open (V is
+offered). `assembly/rollout.mjs` holds the reference verifier and bucket rule.
+
+Only `.github/workflows/rollout.yml` writes the file (main only): it builds the
+payload, signs it in the `windows-signing` Environment with the existing
+`import-signing-key.ps1`/`sign-manifest.ps1` (key removed afterwards), verifies
+it against `windows-signing.json`, commits it to `desktop-rollout` (created as an
+orphan when missing) and then reports, without failing, whether the website
+mirror serves identical bytes within five minutes. `dry_run=true` signs and
+verifies without committing.
+
+```text
+# before publishing 3.0.22: stage it at 10%
+gh workflow run rollout.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f version=3.0.22 -f percent=10
+# widen
+gh workflow run rollout.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f version=3.0.22 -f percent=50
+gh workflow run rollout.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f version=3.0.22 -f percent=100
+# kill switch: hold 3.0.22 back from every >= 3.0.21 client
+gh workflow run rollout.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f version=3.0.22 -f paused=true
+# signing check only
+gh workflow run rollout.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f version=3.0.22 -F dry_run=true
+```
+
+Limits: clients <= 3.0.20 always follow `latest.yml`, so pausing only holds back
+>= 3.0.21 clients. A paused version still stays `latest` on GitHub; a truly bad
+release needs a newer fixed version (latest never moves backwards). Once the
+fixed version is published, clients that did not take the bad one skip to it,
+since the rollout file names only one version and any other version fails open.
