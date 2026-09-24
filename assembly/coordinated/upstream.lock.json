@@ -5,5 +5,5 @@
   "tag": "dsh-v0.1.5-rc.3",
   "dshVersion": "0.1.5-rc.3",
   "patch": "coordinated-delivery.patch",
-  "scope": "Desktop release identity, managed plugin and dependency transactions, runtime reuse, differential downloads, installer/startup progress, legacy migration, idle restart, external HTTP(S) browser navigation and explicit credential-file startup recovery. No DSH core or conversation UI changes."
+  "scope": "Desktop release identity, managed plugin and dependency transactions, runtime reuse, install-time and background runtime preparation with startup activation, differential downloads, installer/startup progress, legacy migration, idle restart, external HTTP(S) browser navigation and explicit credential-file startup recovery. No DSH core or conversation UI changes."
 }

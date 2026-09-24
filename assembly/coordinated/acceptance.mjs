@@ -33,7 +33,11 @@ if (nativeUpdate) {
 }
 const stateRoot = join(root, '.local/coordinated/acceptance')
 mkdirSync(stateRoot, { recursive: true })
-const state = mkdtempSync(join(stateRoot, 'run-'))
+// Installed acceptance may create the state first, so the installer prepares the
+// runtime in the same isolated Home that the first launch then uses.
+const presetState = !nativeUpdate ? process.env.AGENTROUTER_ACCEPTANCE_STATE : undefined
+if (presetState) assert.ok(resolve(presetState).startsWith(resolve(stateRoot) + sep) && existsSync(presetState))
+const state = presetState ? resolve(presetState) : mkdtempSync(join(stateRoot, 'run-'))
 const home = nativeUpdate ? join(homedir(), '.dsh') : join(state, 'home')
 const electronHome = nativeUpdate ? join(process.env.APPDATA, 'AgentRouter') : join(state, 'electron')
 if (nativeUpdate) {
@@ -78,6 +82,22 @@ await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${gateway.address().port}`
 let app, page
 const launches = []
+/**
+ * Startup budgets on hosted Windows workers, from process launch to a usable
+ * composer (first launch after installation, later launches) or, after a native
+ * update, from the restarted process to its ready record. Launching only starts
+ * an already materialized runtime; exceeding a budget fails acceptance.
+ */
+export const STARTUP_BUDGETS_MS = Object.freeze({ firstLaunch: 15000, normalLaunch: 15000, updateRestart: 12000 })
+const budgets = []
+// Installed acceptance may share its Home with the installer's runtime preparation.
+const installerPrepared = existsSync(join(home, 'desktop/installer-prepare.json'))
+  && json(join(home, 'desktop/installer-prepare.json')).outcome === 'installed'
+const withinBudget = (kind, measuredMs, detail = {}) => {
+  budgets.push({ kind, measuredMs, budgetMs: STARTUP_BUDGETS_MS[kind], ...detail })
+  console.log(JSON.stringify({ phase: 'startup-budget', kind, measuredMs, budgetMs: STARTUP_BUDGETS_MS[kind], ...detail }))
+  assert.ok(measuredMs <= STARTUP_BUDGETS_MS[kind], `${kind} took ${measuredMs} ms; budget ${STARTUP_BUDGETS_MS[kind]} ms`)
+}
 let workspaceUiPath = false
 /**
  * A real user must be able to get a usable composer and pick a workspace through
@@ -124,6 +144,7 @@ const assertWorkspaceUiPath = async page => {
 }
 const debuggerDetachWait = new WeakSet()
 let nativeUpdateMetrics
+let preparedUpdate
 let unrelatedProcess
 let externalBrowserNavigation = false
 let acceptancePassed = false
@@ -189,6 +210,7 @@ const launch = async receipt => {
     }
   }
   await expect(page.getByRole('button', { name: '选择工作区', exact: true })).toBeVisible({ timeout: 90000 })
+  const usableMs = Date.now() - started
   const notice = page.getByRole('dialog', { name: '内测声明', exact: true })
   if (await notice.isVisible()) {
     // The preceding Desktop can reload its profile while saving first-run
@@ -247,7 +269,19 @@ const launch = async receipt => {
     startup = json(join(home, 'desktop/startup.json'))
     assert.ok(startup.visibleMs < 10000, 'Show startup progress within ten seconds')
   }
-  launches.push({ productVersion: receipt.input.productVersion, durationMs: Date.now() - started, startup })
+  launches.push({ productVersion: receipt.input.productVersion, usableMs, durationMs: Date.now() - started, startup })
+  if (!receipt.legacy && startup && !legacyExecutable) {
+    // The first launch of an installation must not install; later ones only start.
+    const first = launches.filter(launch => launch.productVersion === receipt.input.productVersion).length === 1
+      && !nativeUpdate && !candidate
+    if (first && installerPrepared) {
+      assert.equal(startup.rebuilt, false, 'The installer materializes the runtime; the first launch only starts it')
+      withinBudget('firstLaunch', usableMs, { readyMs: startup.durationMs })
+    } else if (first) {
+      // This installation prepared another Home (e.g. the runner's default one).
+      console.log(JSON.stringify({ phase: 'first-launch-without-installer-preparation', usableMs, startup }))
+    } else if (startup.rebuilt === false) withinBudget('normalLaunch', usableMs, { readyMs: startup.durationMs })
+  }
   if (!receipt.legacy && (!candidate || receipt === candidate)) {
     await assertExternalWebNavigation(app, page)
     externalBrowserNavigation = true
@@ -412,8 +446,14 @@ try {
       assert.equal(discovered.product.latestVersion, candidate.input.productVersion)
       assert.equal(discovered.product.latestPluginVersion, candidate.input.plugin.version)
       await api('updates/download', { version: candidate.input.productVersion })
-      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 300000 }).toBe('ready')
+      await expect.poll(async () => (await api('updates/status')).phase, { timeout: 600000 }).toBe('ready')
       assert.equal((await api('updates/status')).canInstall, true)
+      preparedUpdate = (await api('updates/status')).preparation
+      console.log(JSON.stringify({ phase: 'update-runtime-preparation', preparedUpdate,
+        receipt: existsSync(join(home, 'desktop/prepared-update.json')) ? json(join(home, 'desktop/prepared-update.json')) : undefined }))
+      if (baseline.input.plugin.version !== candidate.input.plugin.version) {
+        assert.equal(preparedUpdate?.outcome, 'prepared', 'The running release must prepare a changed runtime in the background')
+      }
       assert.equal(await app.evaluate(({ app }) => app.getVersion()), baseline.input.productVersion,
         'Download alone does not restart or activate the installer')
       const pending = join(process.env.LOCALAPPDATA, '@agentrouterdesktop-updater/pending')
@@ -483,13 +523,23 @@ try {
         catch { return false }
       }, { timeout: 180000 }).toBe(true)
       const startup = json(join(home, 'desktop/startup.json'))
-      assert.equal(startup.rebuilt, false, 'An identical runtime must not be installed again')
+      assert.equal(startup.rebuilt, false, 'The restart only activates or retains a runtime; it never installs one')
       assert.ok(startup.visibleMs < 10000, 'Update restart must show its startup window within ten seconds')
-      assert.ok(startup.durationMs < 30000, 'An unchanged runtime must become ready within thirty seconds')
-      assert.deepEqual({ bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }, modulesBefore)
+      const runtimeChanged = baseline.input.plugin.version !== candidate.input.plugin.version
+      if (runtimeChanged) {
+        // The running release prepared the next runtime before quitting; the
+        // restart switched profiles and the replaced one stays as its fallback.
+        assert.equal(startup.preparedRuntime, true, 'A changed runtime must be prepared before the restart')
+        assert.ok(startup.events.some(event => event.stage === 'activating'))
+        assert.equal(json(join(profile, 'node_modules/@agentrouter-top/dsh-codex/package.json')).version, candidate.input.plugin.version)
+      } else {
+        assert.deepEqual({ bytes: readFileSync(modulesPath, 'utf8'), mtime: statSync(modulesPath).mtimeMs }, modulesBefore)
+      }
+      withinBudget('updateRestart', startup.durationMs, { runtimeChanged, preparation: preparedUpdate })
       assert.equal(unrelatedProcess.exitCode, null, 'Installer must leave the same-name sibling process running')
       unrelatedProcess.kill(); unrelatedProcess = undefined
-      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, dependenciesRetained: true, processExit,
+      nativeUpdateMetrics = { restartToReadyMs: Date.now() - restartStarted, startup, preparedUpdate, runtimeChanged,
+        dependenciesRetained: !runtimeChanged, processExit,
         cancelledInstallerRetried: true, verifiedDownloadRetained: true, quitVetoHandled: true, unrelatedProcessPreserved: true }
       console.log(JSON.stringify({ nativeUpdateMetrics }))
       const processEnv = { ...env, AGENTROUTER_TEST_INSTALLED_EXE: candidate.executable }
@@ -577,7 +627,9 @@ try {
     automaticInstallerRestart: nativeUpdate, publicFeedUpgrade: false, legacyProfileMigration: !!legacyExecutable,
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { thirdPartyPluginPreserved: !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
-    nativeUpdateMetrics, externalBrowserNavigation, workspaceUiPath, credentialRecovery, runtimeRecovery, launches })
+    nativeUpdateMetrics, externalBrowserNavigation, workspaceUiPath, credentialRecovery, runtimeRecovery, launches,
+    startupBudgets: budgets, installerPrepare: existsSync(join(home, 'desktop/installer-prepare.json'))
+      ? json(join(home, 'desktop/installer-prepare.json')) : undefined })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   // Single-install scenarios also leave their evidence in the target's output.
   const evidence = (candidate ?? first).output
