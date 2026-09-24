@@ -239,7 +239,8 @@ const launch = async receipt => {
   if (!receipt.legacy && (!candidate || receipt === candidate)) {
     await assertExternalWebNavigation(app, page)
     externalBrowserNavigation = true
-    if (process.platform === 'win32') {
+    // Once per run: later relaunches (recovery, update) reopen the picked folder.
+    if (process.platform === 'win32' && !workspaceUiPath) {
       await assertWorkspaceUiPath(page)
       workspaceUiPath = true
     }
