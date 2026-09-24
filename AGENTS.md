@@ -67,3 +67,9 @@ not another feature source. Keep private checkout and process output in temporar
 storage, send candidates and evidence only to the private plugin repository, and
 retain its protected npm publisher. Read `assembly/plugin-ci/README.md` before
 changing this cross-repository path. Do not add public source caches or artifacts.
+
+Release lock: do not merge into main while a `release.yml` run is queued or in
+progress (`gh run list --workflow release.yml`). The ci.yml `Release lock` check
+waits for it on pull requests; merge only when it is green and re-check right
+before merging, so evidence reuse, signed-draft recovery and resume keep binding
+to the tree the release started from.
