@@ -1,5 +1,14 @@
 [
   {
+    "version": "3.0.18",
+    "changes": [
+      { "kind": "improved", "text": "启动时不再等待模型与账户检查，界面更快可用；常见错误改为中文说明。" },
+      { "kind": "fixed", "text": "Codex 请求失败时显示具体原因，模型列表只显示当前账户可用的模型。" },
+      { "kind": "improved", "text": "界面文案、标题和图标统一为 AgentRouter。" },
+      { "kind": "improved", "text": "运行环境升级到 DSH 0.1.5-rc.3。" }
+    ]
+  },
+  {
     "version": "3.0.17",
     "changes": [
       { "kind": "fixed", "text": "修复首次启动或升级迁移时，因配置目录被系统短暂占用而无法启动的问题。" },

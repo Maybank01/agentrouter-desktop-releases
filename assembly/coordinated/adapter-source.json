@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "b4d933a7bd00ff816318f965d9c956192e91944e",
+  "commit": "78a4dadd182b1885a15d1dd9f6bd9b5615606677",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -43,7 +43,7 @@
     {
       "path": "installer-baseline.json",
       "bytes": 211,
-      "sha256": "2fe469ca2370fe2ec6f6d2b77f4bc8e79ece7b8be20bf2a121de12a4e32648a8"
+      "sha256": "85321713adc70c8c6dc73d88bf03a7827690f5e8099c5a9cb049447204f54d65"
     },
     {
       "path": "legacy-installer.json",
@@ -58,12 +58,12 @@
     {
       "path": "package.json",
       "bytes": 765,
-      "sha256": "fbcd3fdb809402bb183a987e95b08e7efe68c8274d5a4da06a924f54e27d606f"
+      "sha256": "ff23a5ba9bba4fac51b758189fd3cc781acb4bfa59339ba8852777222c09de1e"
     },
     {
       "path": "package-lock.json",
-      "bytes": 541931,
-      "sha256": "84d56895da6427206aab1f5816235f0142539cb3b7950164f2f959f1f9c31c6c"
+      "bytes": 541573,
+      "sha256": "b260e25a0529a21d4d7c9923ca464b50444f826eb1a31d03dd4e0f43969a76aa"
     },
     {
       "path": "prepare.mjs",
@@ -73,7 +73,7 @@
     {
       "path": "release.json",
       "bytes": 711,
-      "sha256": "8603abeb82dda4d036d9e674c6b9e80ec22388c6a8ef139a23f6f9f7444a018c"
+      "sha256": "033ae4cfe9b6cae5eb1abe14420fd251158c06b665da48c5ccab95ddc48d3cb3"
     },
     {
       "path": "store-migration-acceptance.mjs",
@@ -88,7 +88,7 @@
     {
       "path": "upstream.lock.json",
       "bytes": 589,
-      "sha256": "635b4e8d8ec0a83a7178d5ba5e72371c1e82d3f2091748087688351a33bf668b"
+      "sha256": "ede998cdf4d4d55ab719e98a896df69f2e3567b43c2d7fa1d420925208995a8d"
     },
     {
       "path": "vitest.config.mjs",
@@ -187,8 +187,8 @@
     },
     {
       "path": "release-history.json",
-      "bytes": 3482,
-      "sha256": "a4a73dbff4c823b0910365ed7889f995e16d3c03bb53d3b937e04ba25e531447"
+      "bytes": 3988,
+      "sha256": "dcf1627886918d5568d51a6d9b6ecab4858e546f58f7ce78d6f975eb7f6a9458"
     },
     {
       "path": "update-center.md",
