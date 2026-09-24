@@ -330,7 +330,20 @@ try {
   })
 
   await step('baseline-first-launch', async () => {
-    const { usableMs } = await launch('baseline-first', baseline)
+    let usableMs
+    try { ({ usableMs } = await launch('baseline-first', baseline)) }
+    catch (error) {
+      // Old releases can fail their own first-run runtime build transiently
+      // (3.0.17: EBUSY removing a staging profile). A user reopens the app; so
+      // do we, once, and record it. This is the baseline's first run, not the update path.
+      const dialogs = existsSync(join(out, 'dialogs.log')) ? readFileSync(join(out, 'dialogs.log'), 'utf8').slice(-2000) : undefined
+      result.baselineFirstLaunchRetry = { error: String(error?.message ?? error).slice(0, 1000), dialogs,
+        startup: tryJson(join(desktopRoot, 'startup.json')) }
+      logLine({ baselineFirstLaunchRetry: result.baselineFirstLaunchRetry })
+      try { await close() } catch {}
+      cleanupProcesses()
+      ;({ usableMs } = await launch('baseline-first-retry', baseline))
+    }
     result.durations.baselineFirstLaunchMs = usableMs
     result.baselineFirstStartup = tryJson(join(desktopRoot, 'startup.json'))
     result.baselineInstallerPrepare = tryJson(join(desktopRoot, 'installer-prepare.json'))?.outcome ?? 'absent'
