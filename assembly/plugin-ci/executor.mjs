@@ -270,6 +270,17 @@ export async function storeResult({ request, files, receipt, token, api }) {
     // Quiet successful checkout/sync stages can leave empty logs. GitHub rejects
     // zero-byte Release assets; omit them so they cannot block the real receipt.
     .filter(({ bytes }) => bytes.length > 0)
+  // The candidate's own stage timeline (durations and budgets only) is kept with
+  // the private evidence so failed runs show where their time went.
+  const timeline = files.source && join(files.source, '.local/public-ci/timeline.json')
+  if (timeline && existsSync(timeline)) {
+    const bytes = redactCredential(readFileSync(timeline), token)
+    payloads.push({ name: 'timeline.json', bytes })
+    try {
+      const summary = JSON.parse(bytes.toString('utf8'))
+      receipt.timeline = { durationMs: summary.durationMs, overBudget: summary.overBudget === true, breaches: summary.breaches ?? [] }
+    } catch { /* Keep the asset; the receipt only omits the summary. */ }
+  }
   receipt.logs = payloads.map(({ name, bytes }) => ({ name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }))
   writeFileSync(files.receipt, `${JSON.stringify(receipt, null, 2)}\n`)
   payloads.push({ name: 'result.json', bytes: readFileSync(files.receipt) })

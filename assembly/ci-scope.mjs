@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 export function requiresInstalledAcceptance(paths) {
   return paths.some(path => {
     if (/\.(md|txt)$/.test(path) || /^(docs\/|\.github\/ISSUE_TEMPLATE\/)/.test(path)) return false
-    if (/^assembly\/(test\/|plugin-ci\/|coordinated-(website|public|recovery)\.mjs$|ci-scope\.mjs$)/.test(path)) return false
+    if (/^assembly\/(test\/|plugin-ci\/|coordinated-(website|public|recovery)\.mjs$|ci-scope\.mjs$|wait-plugin\.mjs$|mirror-verify\.mjs$|release-timeline\.mjs$|release-budgets\.json$)/.test(path)) return false
     if (path === '.github/workflows/plugin-validation.yml') return false
     return true
   })

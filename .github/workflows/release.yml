@@ -16,6 +16,11 @@ on:
         description: Resume an existing signed release from this completed run without rebuilding
         type: string
         default: ''
+      profile:
+        description: Release profile (hotfix defers only the unsigned pre-sign duplicate of the signed installed checks; recorded in the receipt)
+        type: choice
+        options: [standard, hotfix]
+        default: standard
       retain_plugin_reason:
         description: Only for an intentional older-plugin maintenance release; recorded in the release receipt
         type: string
@@ -275,6 +280,11 @@ jobs:
         run: |
           $release = Get-Content assembly/coordinated/release.json -Raw | ConvertFrom-Json
           if ($release.candidateOnly) { throw 'The product version is still candidate-only' }
+      - name: Wait for npm to serve the locked plugin bytes
+        if: inputs.retain_plugin_reason == ''
+        env:
+          PLUGIN_WAIT_MINUTES: '20'
+        run: node assembly/wait-plugin.mjs --require-next
       - id: selection
         name: Check published modules are included before expensive acceptance
         env:
@@ -290,7 +300,7 @@ jobs:
   coordinated:
     name: Accept coordinated installers before signing
     needs: coordinated_evidence
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.resume_signed_run == '' && (!inputs.publish || (needs.coordinated_evidence.result == 'success' && needs.coordinated_evidence.outputs.found != 'true')) }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.resume_signed_run == '' && (!inputs.publish || (needs.coordinated_evidence.result == 'success' && needs.coordinated_evidence.outputs.found != 'true' && inputs.profile != 'hotfix')) }}
     runs-on: windows-2025
     timeout-minutes: 60
     permissions:
@@ -313,7 +323,7 @@ jobs:
   coordinated_sign:
     name: Sign and stage the exact product release
     needs: [coordinated_evidence, coordinated]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && inputs.resume_signed_run == '' && needs.coordinated_evidence.result == 'success' && (needs.coordinated_evidence.outputs.found == 'true' || needs.coordinated.result == 'success') }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && inputs.resume_signed_run == '' && needs.coordinated_evidence.result == 'success' && (needs.coordinated_evidence.outputs.found == 'true' || needs.coordinated.result == 'success' || (inputs.profile == 'hotfix' && needs.coordinated.result == 'skipped')) }}
     runs-on: windows-2025
     environment: windows-signing
     timeout-minutes: 60
@@ -363,6 +373,7 @@ jobs:
           ACCEPTED_CANDIDATE_JSON: ${{ needs.coordinated.outputs.receipt }}
           ACCEPTANCE_EVIDENCE_JSON: ${{ needs.coordinated_evidence.outputs.evidence }}
           RELEASE_SELECTION_JSON: ${{ needs.coordinated_evidence.outputs.selection }}
+          RELEASE_PROFILE: ${{ inputs.profile }}
         run: |
           node assembly/coordinated-release.mjs stage "$env:INSTALLER_RECEIPT"
           if ($LASTEXITCODE -ne 0) { throw 'Signed release staging failed' }
@@ -559,6 +570,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node assembly/coordinated-release.mjs publish .local/signed-release
+      - name: Warm and verify the website download mirror (installer, blockmap, manifest, then latest.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Report-only until the Cloud mirror route serves blockmaps and the feed; then set to 'true'.
+          MIRROR_REQUIRED: 'false'
+        run: node assembly/mirror-verify.mjs
   coordinated_outcome:
     name: Require the requested publication
     # A requested publication must never report success while any gate was
@@ -577,3 +594,28 @@ jobs:
             echo "::error::Publication was requested but the publish job result is '$PUBLISH_RESULT'"
             exit 1
           fi
+  coordinated_timeline:
+    name: Release timeline and budgets
+    # Always measured after a coordinated run: per-job queue/duration against
+    # assembly/release-budgets.json. A failed job or breach opens an incident.
+    needs: [coordinated_evidence, coordinated, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.delivery == 'coordinated' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - name: Report the timeline and open an incident on failure or budget breach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PROFILE: ${{ inputs.profile }}
+          TIMELINE_JOB_NAME: Release timeline and budgets
+        run: node assembly/release-timeline.mjs ${{ inputs.publish && '--incident' || '' }}

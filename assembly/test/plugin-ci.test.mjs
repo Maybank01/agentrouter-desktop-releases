@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { authorizeSource, buildEnvironment, executionRepository, githubApi, requestFromEnvironment,
@@ -163,5 +163,28 @@ test('failure evidence is uploaded only to private storage; credentials are reda
         : { body: JSON.stringify({ ...request, sourceSha: 'f'.repeat(40) }), prerelease: true, draft: false } }), /RESULT_TAG_COLLISION/)
     await assert.rejects(storeResult({ request, files: { root }, receipt, token,
       api: async () => ({ private: false }) }), /RESULT_REPOSITORY_MUST_BE_PRIVATE/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('the candidate timeline is kept privately and summarized in the receipt before result.json', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agentrouter-ci-timeline-'))
+  try {
+    const source = join(root, 'source')
+    mkdirSync(join(source, '.local/public-ci'), { recursive: true })
+    writeFileSync(join(root, 'validation.log'), 'ok')
+    writeFileSync(join(source, '.local/public-ci/timeline.json'), JSON.stringify({ durationMs: 600000, overBudget: false, breaches: ['packed-web-acceptance'], stages: [] }))
+    const request = requestFromEnvironment(environment)
+    const receipt = resultReceipt(request, { validationPassed: true, deliveryPassed: true, stage: 'completed' })
+    const uploads = []
+    const api = async (path, options) => {
+      if (path.includes('/assets?')) uploads.push({ name: new URL(path).searchParams.get('name'), body: options.body })
+      if (path === `/repos/${sourceRepository}`) return { private: true }
+      if (path.includes('/releases/tags/')) return null
+      if (path.endsWith('/releases')) return { id: 42, assets: [] }
+      return { id: 43 }
+    }
+    await storeResult({ request, files: { root, source, receipt: join(root, 'result.json') }, receipt, token: 'fake-fixture-credential', api })
+    assert.deepEqual(uploads.map(upload => upload.name), ['validation.log', 'timeline.json', 'result.json'])
+    assert.deepEqual(JSON.parse(uploads.at(-1).body).timeline, { durationMs: 600000, overBudget: false, breaches: ['packed-web-acceptance'] })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -147,3 +147,28 @@ client update policy and can update the same npm plugin separately.
 
 Plugin `next`, the desktop product release and model-account origin are distinct
 settings. Packaging does not silently migrate accounts or change model traffic.
+
+## 2026-09-24: hotfix profile, npm wait and release timeline
+
+`release.yml` takes `profile: standard | hotfix` (owner-approved after the 3.0.19
+lead time). `hotfix` defers only the unsigned pre-sign installed acceptance when
+no identical-input ci.yml evidence exists: those scenarios are repeated on the
+signed draft anyway (signed native update, signed legacy migration, clean-worker
+install) and still run in ci.yml on the export PR and the main push. Signing,
+Authenticode, the signed update manifest, every signed installed check and the
+publication/feed verification remain gates. The staged and final receipts carry
+`releaseProfile`; a receipt without pre-sign evidence is valid only with the
+exact recorded hotfix deferral (`assembly/coordinated-signed.mjs`).
+
+A release PR may be opened as soon as the plugin candidate is accepted:
+`assembly/wait-plugin.mjs` (ci.yml `Locked plugin bytes on npm`, and the release
+evidence job with `--require-next`) waits up to 20-30 minutes until npm serves
+the locked version with the same integrity, size and SHA-256. A different
+artifact fails immediately; a missing one fails after the bounded wait.
+
+`Release timeline and budgets` measures every job's queue and duration against
+`assembly/release-budgets.json`, writes the table to the run summary and, for
+publishing runs, opens an incident issue when a job failed or a budget was
+exceeded. The publish job also embeds the timeline in `release-receipt.json`.
+A failed installed acceptance on a main push opens an incident as well, so a
+hotfix published ahead of those suites is never silently unverified.

@@ -25,7 +25,7 @@ test('optional Desktop publication is manually dispatched on main and never foll
   assert.match(ci, /workflow_dispatch:/)
   assert.match(ci, /runs-on: ubuntu-latest/)
   assert.match(ci, /runs-on: windows-2025/)
-  assert.equal((ci.match(/persist-credentials: false/g) ?? []).length, 3)
+  assert.equal((ci.match(/persist-credentials: false/g) ?? []).length, 4)
   assert.equal((ci.match(/runs-on: windows-2025/g) ?? []).length, 2)
   for (const command of ['npm test', 'git diff --check',
     'npm ci --ignore-scripts --prefix assembly/coordinated',
@@ -33,7 +33,12 @@ test('optional Desktop publication is manually dispatched on main and never foll
     'node assembly/coordinated-candidate.mjs --scenario=${{ matrix.scenario }}']) assert.ok(ci.includes(command), command)
   // Installed checks run as parallel scenarios, all gated by the change scope and
   // all required; none may be silently dropped from the matrix.
-  assert.equal((ci.match(/if: needs\.bootstrap\.outputs\.installed == 'true'/g) ?? []).length, 2)
+  assert.equal((ci.match(/if: needs\.bootstrap\.outputs\.installed == 'true'/g) ?? []).length, 3)
+  // Installed scenarios start once npm serves the exact locked bytes, never before.
+  assert.match(ci, /needs: \[bootstrap, plugin_bytes\]/)
+  assert.match(ci, /run: node assembly\/wait-plugin\.mjs\r?\n/)
+  // A failed installed acceptance on main (possibly after a hotfix published) opens an incident.
+  assert.match(ci, /if: \$\{\{ failure\(\) && github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}/)
   assert.match(ci, /fail-fast: false/)
   for (const scenario of ['native-updater', 'legacy-migration', 'fresh-install-recovery']) {
     assert.match(ci, new RegExp(`- scenario: ${scenario}\\r?\\n`), scenario)
@@ -93,7 +98,18 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
   const lane = workflow.split('\n  # Coordinated lane:')[1]
   const jobs = Object.fromEntries(lane.split(/\n  (?=[a-z_]+:\r?\n)/).slice(1).map(body => [body.slice(0, body.indexOf(':')), body]))
   assert.deepEqual(Object.keys(jobs), ['coordinated_evidence', 'coordinated', 'coordinated_sign', 'coordinated_signed_update',
-    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_publish', 'coordinated_outcome'])
+    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_publish', 'coordinated_outcome', 'coordinated_timeline'])
+  // The hotfix profile defers only the unsigned pre-sign duplicate; signing and
+  // every signed installed check still gate publication, and it is recorded.
+  assert.match(workflow, /options: \[standard, hotfix\]/)
+  assert.match(jobs.coordinated, /inputs\.profile != 'hotfix'/)
+  assert.match(jobs.coordinated_sign, /inputs\.profile == 'hotfix' && needs\.coordinated\.result == 'skipped'/)
+  assert.match(jobs.coordinated_sign, /RELEASE_PROFILE: \$\{\{ inputs\.profile \}\}/)
+  assert.match(jobs.coordinated_evidence, /node assembly\/wait-plugin\.mjs --require-next/)
+  assert.match(jobs.coordinated_timeline, /if: \$\{\{ always\(\) && [^\n]*inputs\.delivery == 'coordinated' \}\}/)
+  assert.match(jobs.coordinated_timeline, /node assembly\/release-timeline\.mjs/)
+  assert.doesNotMatch(jobs.coordinated_timeline, /secrets\.|contents: write|environment:/)
+  delete jobs.coordinated_timeline
   // The outcome guard reads only job results: no checkout, no token scopes.
   assert.doesNotMatch(jobs.coordinated_outcome, /uses: |run: node /)
   assert.match(jobs.coordinated_outcome, /permissions: \{\}/)
