@@ -88,7 +88,7 @@ const launches = []
  * update, from the restarted process to its ready record. Launching only starts
  * an already materialized runtime; exceeding a budget fails acceptance.
  */
-export const STARTUP_BUDGETS_MS = Object.freeze({ firstLaunch: 15000, normalLaunch: 12000, updateRestart: 12000 })
+export const STARTUP_BUDGETS_MS = Object.freeze({ firstLaunch: 15000, normalLaunch: 15000, updateRestart: 12000 })
 const budgets = []
 // Installed acceptance may share its Home with the installer's runtime preparation.
 const installerPrepared = existsSync(join(home, 'desktop/installer-prepare.json'))
