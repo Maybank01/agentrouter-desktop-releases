@@ -226,7 +226,15 @@ if (phase === 'stage') {
   const { receipt, installer, executable, signature, signedManifest } = await loadSignedRelease(path)
   const work = mkdtempSync(join(process.env.RUNNER_TEMP, 'agentrouter-signed-'))
   const installed = join(work, 'installed')
-  const testEnv = { ...process.env, AGENTROUTER_TEST_INSTALLER: executable, AGENTROUTER_TEST_INSTALL_DIR: installed }
+  // The installer materializes the runtime in the Home it runs with. Install into
+  // the same isolated acceptance Home the first launch uses, so the first-launch
+  // budget (no rebuild, usable within 15 s) is enforced rather than only logged.
+  const acceptanceRoot = join(root, '.local/coordinated/acceptance')
+  mkdirSync(acceptanceRoot, { recursive: true })
+  const acceptanceState = mkdtempSync(join(acceptanceRoot, 'signed-'))
+  const acceptanceHome = join(acceptanceState, 'home')
+  const testEnv = { ...process.env, AGENTROUTER_TEST_INSTALLER: executable, AGENTROUTER_TEST_INSTALL_DIR: installed,
+    DSH_HOME: acceptanceHome, DSH_TELEMETRY_DISABLED: '1' }
   delete testEnv.GH_TOKEN; delete testEnv.GITHUB_TOKEN
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     '$p = Start-Process -FilePath $env:AGENTROUTER_TEST_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:AGENTROUTER_TEST_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "NSIS failed: $($p.ExitCode)" }'],
@@ -244,10 +252,16 @@ if (phase === 'stage') {
   const output = join(work, 'evidence'); mkdirSync(output)
   const candidate = join(work, 'installed.json')
   writeJson(candidate, { input, executable: installedExe, output, pluginSha256: input.plugin.sha256, patchSha256 })
+  const preparation = JSON.parse(readFileSync(join(acceptanceHome, 'desktop/installer-prepare.json'), 'utf8'))
+  assert.equal(preparation.outcome, 'installed', 'The signed installer must materialize the runtime before the first launch')
+  const acceptanceEnv = { ...testEnv, AGENTROUTER_ACCEPTANCE_STATE: acceptanceState }
+  delete acceptanceEnv.DSH_HOME
   const acceptedOutput = execFileSync(process.execPath, [join(adapter, 'acceptance.mjs'), candidate],
-    { env: testEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, timeout: 600000 })
+    { env: acceptanceEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, timeout: 600000 })
   const acceptance = JSON.parse(acceptedOutput.trim().split(/\r?\n/).at(-1))
   assert.equal(acceptance.passed, true)
+  assert.ok(acceptance.startupBudgets?.some(budget => budget.kind === 'firstLaunch'),
+    'The signed fresh install must measure its first launch against the budget')
   const record = { ...acceptance, kind: 'fresh-install', installerExecuted: true, signedInstallerSha256: installer.sha256,
     signature, signing: input.signing, sourceCommit: releaseSource, workflowRun: { id: releaseRun },
     verifierRun: workflowRun(), verifierCommit: process.env.GITHUB_SHA, input, patchSha256 }
