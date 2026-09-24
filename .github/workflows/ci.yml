@@ -106,6 +106,31 @@ jobs:
       - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
       - name: Build and accept the product installer on a disposable worker
         run: node assembly/coordinated-candidate.mjs --scenario=${{ matrix.scenario }}
+  release_lock:
+    name: Release lock (merge only while no release runs)
+    # Merging release inputs while release.yml runs would change the tree its
+    # evidence reuse, signed-draft recovery and resume checks bind to. This check
+    # waits until no release.yml run is queued or in progress; merge only when green
+    # and re-check `gh run list --workflow release.yml` right before merging.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for active releases to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          for attempt in $(seq 1 90); do
+            active=$(gh run list --repo "$REPO" --workflow release.yml --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length')
+            if [ "$active" = "0" ]; then echo "No release is running."; exit 0; fi
+            echo "$active release run(s) active; waiting so the release inputs stay fixed."
+            sleep 60
+          done
+          echo "::error::A release is still running after 90 minutes"
+          exit 1
   incident:
     name: Open an incident for a failed main acceptance
     # Hotfix releases may publish before these installed suites finish on main.
