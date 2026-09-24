@@ -1,9 +1,9 @@
 {
   "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
-  "commit": "fb2c4b9e698e30edb738bca4cf0618587db7d203",
-  "tree": "bd7dd6d90010a35d3d6ff9f12c1f6207d5b6fe38",
-  "tag": "dsh-v0.1.5-rc.2",
-  "dshVersion": "0.1.5-rc.2",
+  "commit": "a4c74a91e06b00fe0b0937bde982170c526cc842",
+  "tree": "bf4fd1ddccc211107ffb8b7074c83afac2bd7ea1",
+  "tag": "dsh-v0.1.5-rc.3",
+  "dshVersion": "0.1.5-rc.3",
   "patch": "coordinated-delivery.patch",
   "scope": "Desktop release identity, managed plugin and dependency transactions, runtime reuse, differential downloads, installer/startup progress, legacy migration, idle restart, external HTTP(S) browser navigation and explicit credential-file startup recovery. No DSH core or conversation UI changes."
 }

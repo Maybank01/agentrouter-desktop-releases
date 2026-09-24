@@ -2,6 +2,6 @@
   "schemaVersion": 1,
   "candidateOnly": true,
   "productVersion": "3.0.2",
-  "dshVersion": "0.1.5-rc.2",
+  "dshVersion": "0.1.5-rc.3",
   "updateUrl": "https://github.com/Maybank01/agentrouter-desktop-releases/releases/latest/download/"
 }
