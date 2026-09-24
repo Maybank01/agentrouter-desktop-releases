@@ -61,6 +61,7 @@ Timeline (2026-09-23; the previous serial path took about 34-40 minutes):
 | Accept coordinated installers before signing (only without evidence) | Windows | ~14 min |
 | Sign and stage the exact product release | Windows, `windows-signing` | ~5 min |
 | Signed native update and restart / Signed legacy Profile migration / Install signed bytes on a clean worker (parallel) | 3 × Windows | ~9 min (longest) |
+| Verify the signed feed with published client verifiers (parallel with the signed checks) | Ubuntu | ~1-2 min |
 | Publish the accepted signed release and verify delivery | Windows | ~2-7 min |
 
 With reusable evidence a release takes about 17-22 minutes; without it about 31-36.
@@ -94,6 +95,28 @@ publishes. Its final anonymous check verifies the installer, blockmap, updater
 feed and both receipts. The website uses `release-receipt.json` and
 `signed-installed-acceptance.json` to recognize the new client; a test-only or
 unsigned candidate cannot enter that path.
+
+**Backward-compatible feed (schemas are additive only).** Beside the signed
+installed checks, `Verify the signed feed with published client verifiers`
+(Ubuntu, about a minute) downloads the draft and runs `assembly/feed-compat.mjs`.
+For each of the last six published formal releases (>= 3.0.7, with
+`agentrouter-update.json`, older than the candidate) it loads that release's
+exported `update-signature.mjs`, `windows-signing.json` and, when present,
+`update-routes.mjs` and `update-transport.mjs` from git at the commit recorded
+by its `release-receipt.json` (`sourceCommit`; the tag is the fallback and any
+disagreement is printed). The old verifier must accept the signed manifest and
+every named asset present in the draft (the runtime `AgentRouter.exe` is only
+inside the installer and is reported absent); `latest.yml` must parse with
+js-yaml and name the installer's version, url, sha512 and size; the old update
+routes must read the `agentrouter` section; the old `downloadSources` must still
+map the GitHub asset URLs to `https://agentrouter.top/downloads/desktop/v<ver>/`.
+Publish requires this job; a resumed publication repeats the check. Run it
+locally against a directory of release assets:
+
+```text
+git fetch --tags
+node assembly/feed-compat.mjs <directory> --version 3.0.21 [--depth 6]
+```
 
 **Unpublished drafts (owner decision 2026-09-23).** If a draft of the same
 version exists and was never published (`draft: true`, `published_at: null`),

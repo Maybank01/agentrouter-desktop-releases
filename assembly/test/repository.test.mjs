@@ -98,7 +98,7 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
   const lane = workflow.split('\n  # Coordinated lane:')[1]
   const jobs = Object.fromEntries(lane.split(/\n  (?=[a-z_]+:\r?\n)/).slice(1).map(body => [body.slice(0, body.indexOf(':')), body]))
   assert.deepEqual(Object.keys(jobs), ['coordinated_evidence', 'coordinated', 'coordinated_sign', 'coordinated_signed_baseline', 'coordinated_signed_update',
-    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_publish', 'coordinated_outcome', 'coordinated_timeline', 'coordinated_run_drafts'])
+    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_feed_compat', 'coordinated_publish', 'coordinated_outcome', 'coordinated_timeline', 'coordinated_run_drafts'])
   // A signed rehearsal stages a never-published draft and can never publish.
   assert.match(workflow, /rehearse_signed:\r?\n        description: [^\n]*requires publish=false/)
   assert.match(workflow, /AGENTROUTER_REHEARSAL: \$\{\{ inputs\.rehearse_signed && '1' \|\| '' \}\}/)
@@ -157,8 +157,8 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
     assert.match(jobs[name], /gh release download "\$env:RELEASE_TAG"/)
     assert.match(jobs[name], /node assembly\/coordinated-release\.mjs record \.local\/signed-release /)
   }
-  assert.match(jobs.coordinated_publish, /needs: \[coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install\]/)
-  for (const name of ['coordinated_sign', 'coordinated_signed_update', 'coordinated_signed_legacy', 'coordinated_signed_install']) {
+  assert.match(jobs.coordinated_publish, /needs: \[coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat\]/)
+  for (const name of ['coordinated_sign', 'coordinated_signed_update', 'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_feed_compat']) {
     assert.match(jobs.coordinated_publish, new RegExp(`needs\\.${name}\\.result == 'success'`), name)
   }
   assert.match(jobs.coordinated_publish, /node assembly\/coordinated-recovery\.mjs/)

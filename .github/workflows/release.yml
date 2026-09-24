@@ -582,10 +582,42 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node assembly/coordinated-release.mjs record .local/signed-release fresh-install
 
+  # Schemas are additive only: the staged signed feed must be accepted by the
+  # verifier code of the last published client versions before publication.
+  # Runs beside the signed installed checks on a small Ubuntu worker.
+  coordinated_feed_compat:
+    name: Verify the signed feed with published client verifiers
+    needs: coordinated_sign
+    if: ${{ !cancelled() && needs.coordinated_sign.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Draft releases are visible only to tokens with push access.
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: git fetch --tags --force origin
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Download the exact draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.coordinated_sign.outputs.tag }}
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir .local/signed-release
+      - name: Check the draft with the verifiers of the last six published versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node assembly/feed-compat.mjs .local/signed-release
+
   coordinated_publish:
     name: Publish the accepted signed release and verify delivery
-    needs: [coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && !inputs.rehearse_signed && ((needs.coordinated_sign.result == 'success' && needs.coordinated_signed_update.result == 'success' && needs.coordinated_signed_legacy.result == 'success' && needs.coordinated_signed_install.result == 'success') || inputs.resume_signed_run != '') }}
+    needs: [coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && !inputs.rehearse_signed && ((needs.coordinated_sign.result == 'success' && needs.coordinated_signed_update.result == 'success' && needs.coordinated_signed_legacy.result == 'success' && needs.coordinated_signed_install.result == 'success' && needs.coordinated_feed_compat.result == 'success') || inputs.resume_signed_run != '') }}
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -620,6 +652,15 @@ jobs:
       - name: Verify Authenticode and install the signed product again before resuming
         if: inputs.resume_signed_run != ''
         run: node assembly/coordinated-release.mjs accept .local/signed-release
+      - name: Check the resumed assets with the verifiers of the last six published versions
+        if: inputs.resume_signed_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force origin
+          if ($LASTEXITCODE -ne 0) { throw 'Fetching release tags failed' }
+          node assembly/feed-compat.mjs .local/signed-release
+          if ($LASTEXITCODE -ne 0) { throw 'A published client verifier rejects the resumed release' }
       - name: Publish and verify the website, downloads and update feed
         env:
           GH_TOKEN: ${{ github.token }}
@@ -634,7 +675,7 @@ jobs:
     name: Require the requested publication
     # A requested publication must never report success while any gate was
     # skipped: GitHub skips dependants of a skipped job unless told otherwise.
-    needs: [coordinated_evidence, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
+    needs: [coordinated_evidence, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_publish]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.delivery == 'coordinated' && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -652,7 +693,7 @@ jobs:
     name: Release timeline and budgets
     # Always measured after a coordinated run: per-job queue/duration against
     # assembly/release-budgets.json. A failed job or breach opens an incident.
-    needs: [coordinated_evidence, coordinated, coordinated_sign, coordinated_signed_baseline, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
+    needs: [coordinated_evidence, coordinated, coordinated_sign, coordinated_signed_baseline, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_publish]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.delivery == 'coordinated' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
