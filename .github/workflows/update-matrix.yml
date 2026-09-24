@@ -7,8 +7,6 @@ name: Update path matrix
 # this after signing; publication needs it. It can also rehearse against an
 # already published release. See assembly/COORDINATED-RELEASE.md.
 on:
-  push: # TEMPORARY iteration trigger; removed before merge
-    branches: [ci/update-path-matrix]
   workflow_call:
     inputs:
       candidate_tag:
@@ -84,9 +82,9 @@ jobs:
         name: Resolve the candidate and the published baselines
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_TAG: ${{ inputs.candidate_tag || 'v3.0.21' }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
-          BASELINES: ${{ inputs.baselines || (github.event_name == 'push' && '3.0.14,3.0.17,3.0.19,3.0.20' || '') }}
+          BASELINES: ${{ inputs.baselines }}
           MODES: ${{ inputs.modes }}
           FAULTS: ${{ inputs.faults }}
           EXPECT_RELEASE_JSON: ${{ inputs.release_run }}
