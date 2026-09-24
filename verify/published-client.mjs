@@ -26,7 +26,8 @@ const sleep = ms => new Promise(done => setTimeout(done, ms))
 const home = join(homedir(), '.dsh')
 const startupFile = join(home, 'desktop/startup.json')
 const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return undefined } }
-const ps = command => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true }).trim()
+const psEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'))
+const ps = command => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, env: psEnv }).trim()
 const PORT = 9333
 let shot = 0
 
@@ -72,7 +73,11 @@ async function install(installer, label) {
   return executable
 }
 
-let child
+let child, current
+function tree(dir, depth = 0) {
+  if (!existsSync(dir) || depth > 2) return []
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? [entry.name + '/', ...tree(join(dir, entry.name), depth + 1).map(row => entry.name + '/' + row)] : [entry.name])
+}
 async function launch(executable, label) {
   const previous = readJson(startupFile)?.startedAt
   const started = Date.now()
@@ -88,8 +93,14 @@ async function launch(executable, label) {
     if (!page) await sleep(250)
   }
   assert.ok(page, 'application page')
+  current = page
   const composer = page.locator('textarea, [contenteditable="true"]').first()
-  await composer.waitFor({ state: 'visible', timeout: 180000 })
+  try { await composer.waitFor({ state: 'visible', timeout: 120000 }) }
+  catch (error) {
+    log('launch-diagnostics', { pages: browser.contexts().flatMap(context => context.pages()).map(row => row.url()),
+      body: (await page.evaluate(() => document.body?.innerText?.slice(0, 1500)).catch(() => undefined)), files: tree(home) })
+    throw error
+  }
   const usableMs = Date.now() - started
   let startup
   for (let attempt = 0; attempt < 240; attempt++) {
@@ -171,6 +182,7 @@ async function waitDownload(page, { interruptAtPercent } = {}) {
   }
 }
 
+try {
 if (mode === 'fresh') {
   const installer = await download(first)
   const executable = await install(installer, `fresh ${first}`)
@@ -242,3 +254,8 @@ if (mode === 'fresh') {
   await closeApp(session)
 } else throw new Error('Usage: published-client.mjs fresh <version> | update <from> <to>')
 log('passed')
+} catch (error) {
+  if (current) await current.screenshot({ path: join(out, 'failure.png') }).catch(() => {})
+  log('failed', { error: String(error.stack ?? error).slice(0, 3000), files: tree(home) })
+  process.exitCode = 1
+} finally { if (child) kill(child.pid) }
