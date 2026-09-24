@@ -627,8 +627,9 @@ jobs:
       - name: Warm and verify the website download mirror (installer, blockmap, manifest, then latest.yml)
         env:
           GH_TOKEN: ${{ github.token }}
-          # Report-only until the Cloud mirror route serves blockmaps and the feed; then set to 'true'.
-          MIRROR_REQUIRED: 'false'
+          # The mirror route is live (agentrouter-cloud #259/#265). A mismatch or timeout fails
+          # this job after GitHub publication; the timeline job then opens an incident issue.
+          MIRROR_REQUIRED: 'true'
         run: node assembly/mirror-verify.mjs
   coordinated_outcome:
     name: Require the requested publication
