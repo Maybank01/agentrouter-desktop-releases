@@ -61,6 +61,12 @@ export function validateStagedReceipt(receipt, { sourceCommit, runId }) {
   assert.equal(receipt.schemaVersion, 2)
   assert.equal(String(receipt.workflowRun?.id), String(runId), 'The draft was staged by another workflow run')
   assert.equal(receipt.workflowRun.workflow, '.github/workflows/release.yml')
+  if (!receipt.installedCandidate && !receipt.acceptanceEvidence) {
+    // Owner-approved hotfix profile: the unsigned pre-sign duplicate of the signed
+    // installed scenarios is deferred to ci.yml, visibly, never silently absent.
+    validateDeferredPreSign(receipt.releaseProfile)
+    return receipt
+  }
   assert.ok(Boolean(receipt.installedCandidate) !== Boolean(receipt.acceptanceEvidence), 'Exactly one pre-sign acceptance source')
   if (receipt.acceptanceEvidence) {
     assert.equal(receipt.acceptanceEvidence.releaseCommit, sourceCommit)
@@ -71,6 +77,29 @@ export function validateStagedReceipt(receipt, { sourceCommit, runId }) {
     assert.equal(receipt.installedCandidate.legacyInstallerExecuted, true)
   }
   return receipt
+}
+
+export const hotfixDeferral = Object.freeze({
+  name: 'hotfix',
+  preSignInstalledAcceptance: 'deferred',
+  deferredTo: 'ci.yml installed scenarios on the export PR and the main push (asynchronous; a failure opens an incident)',
+  retained: ['Authenticode and signed update manifest', 'signed native update and restart', 'signed legacy Profile migration',
+    'signed clean-worker installation', 'publication, website, download and feed verification', 'plugin bytes equal the authorized npm candidate'],
+  policy: 'owner-approved hotfix profile 2026-09-24',
+})
+
+export function validateDeferredPreSign(profile) {
+  assert.ok(profile, 'Exactly one pre-sign acceptance source')
+  assert.deepEqual(profile, hotfixDeferral, 'Only the recorded hotfix profile may defer pre-sign installed acceptance')
+  return profile
+}
+
+/** Release profile recorded in every staged receipt. */
+export function releaseProfileRecord(name, hasPreSignSource) {
+  assert.ok(['standard', 'hotfix'].includes(name), `Unknown release profile ${name}`)
+  if (hasPreSignSource) return { name, preSignInstalledAcceptance: 'executed-or-reused' }
+  assert.equal(name, 'hotfix', 'Expected exactly one installed acceptance source')
+  return { ...hotfixDeferral }
 }
 
 export function readReleaseReceipt(directory) {

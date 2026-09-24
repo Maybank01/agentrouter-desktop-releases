@@ -10,7 +10,8 @@ import { verifyCoordinatedPublicRelease } from './coordinated-public.mjs'
 import { loadSigningPolicy, inspectWindowsSignature } from './coordinated/windows-signing.mjs'
 import { manifestName, verifyUpdateManifest, verifyUpdateFile } from './coordinated/update-signature.mjs'
 import { localInputs, verifyRecordedEvidence } from './coordinated-evidence.mjs'
-import { assertLatestForward, composeFinalReceipt, finalReceiptName, planDraftStaging, readReleaseReceipt,
+import { currentRun, evaluateJobs } from './release-timeline.mjs'
+import { assertLatestForward, composeFinalReceipt, finalReceiptName, planDraftStaging, readReleaseReceipt, releaseProfileRecord,
   signedRecords, stagedReceiptName, validateSignedRecord, validateStagedReceipt } from './coordinated-signed.mjs'
 
 const repo = 'Maybank01/agentrouter-desktop-releases'
@@ -114,8 +115,9 @@ if (phase === 'stage') {
   // Pre-sign acceptance is either this run's candidate job or reused ci.yml
   // evidence for identical installed-acceptance inputs, never both or neither.
   const acceptedJson = process.env.ACCEPTED_CANDIDATE_JSON?.trim(), evidenceJson = process.env.ACCEPTANCE_EVIDENCE_JSON?.trim()
-  assert.ok(Boolean(acceptedJson) !== Boolean(evidenceJson), 'Expected exactly one installed acceptance source')
-  let preSign
+  const releaseProfile = releaseProfileRecord(process.env.RELEASE_PROFILE || 'standard', Boolean(acceptedJson || evidenceJson))
+  assert.ok(!(acceptedJson && evidenceJson), 'Expected exactly one installed acceptance source')
+  let preSign = {}
   if (acceptedJson) {
     const accepted = JSON.parse(acceptedJson)
     assert.equal(accepted.passed, true)
@@ -124,7 +126,7 @@ if (phase === 'stage') {
     assert.equal(accepted.patchSha256, patchSha256)
     assert.deepEqual(accepted.plugin, input.plugin)
     preSign = { installedCandidate: accepted }
-  } else {
+  } else if (evidenceJson) {
     const evidence = verifyRecordedEvidence({ evidence: JSON.parse(evidenceJson), release: localInputs(process.env.GITHUB_SHA, git) })
     preSign = { acceptanceEvidence: evidence }
   }
@@ -144,7 +146,7 @@ if (phase === 'stage') {
     workflowRun: { workflow: '.github/workflows/release.yml', id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT },
     adapterSource: source, input, selection, upstreamCommit: installer.upstreamCommit, patchSha256, signed: true, testOnly: false,
     signing: installer.signing, signature: installer.signature, runtimeSignature: installer.runtimeSignature,
-    assets: installer.assets, ...preSign }
+    assets: installer.assets, releaseProfile, ...preSign }
   validateStagedReceipt(receipt, { sourceCommit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID })
   const output = installer.output
   const receiptPath = join(output, stagedReceiptName)
@@ -253,6 +255,11 @@ if (phase === 'stage') {
     const records = Object.fromEntries(['native-updater', 'legacy-migration'].map(kind =>
       [kind, validateSignedRecord(kind, json(join(path, signedRecords[kind])), { receipt: downloaded, runId: releaseRun })]))
     receipt = composeFinalReceipt(downloaded, records['native-updater'], records['legacy-migration'])
+    try {
+      // Measured job timeline up to publication; observation only, never a gate.
+      const { run, jobs } = currentRun()
+      receipt.releaseTimeline = evaluateJobs(jobs.filter(job => job.completed_at), { profile: receipt.releaseProfile?.name ?? 'standard', dispatchedAt: run.created_at })
+    } catch (error) { receipt.releaseTimeline = { unavailable: String(error?.message ?? error).slice(0, 200) } }
     writeJson(join(path, finalReceiptName), receipt)
     gh(['release', 'upload', tag, join(path, finalReceiptName), '--repo', repo])
   }

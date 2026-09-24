@@ -34,6 +34,23 @@ jobs:
       - id: scope
         name: Select checks from changed inputs
         run: node assembly/ci-scope.mjs
+  plugin_bytes:
+    name: Locked plugin bytes on npm
+    # A release PR may be opened as soon as the plugin candidate is accepted. The
+    # installed jobs start once npm serves exactly the locked candidate bytes
+    # (integrity, size, SHA-256) instead of failing on a 404 before publication.
+    needs: bootstrap
+    if: needs.bootstrap.outputs.installed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: node assembly/wait-plugin.mjs
   # Installed checks run in parallel on separate disposable Windows workers.
   # Every job must pass; release.yml keeps the full sequential acceptance.
   coordinated:
@@ -60,7 +77,7 @@ jobs:
       - run: node assembly/coordinated/store-migration-acceptance.mjs
   installed:
     name: Installed ${{ matrix.title }}
-    needs: bootstrap
+    needs: [bootstrap, plugin_bytes]
     if: needs.bootstrap.outputs.installed == 'true'
     runs-on: windows-2025
     timeout-minutes: 45
@@ -89,3 +106,19 @@ jobs:
       - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
       - name: Build and accept the product installer on a disposable worker
         run: node assembly/coordinated-candidate.mjs --scenario=${{ matrix.scenario }}
+  incident:
+    name: Open an incident for a failed main acceptance
+    # Hotfix releases may publish before these installed suites finish on main.
+    # Their failure is never silent: it opens an issue for the owner.
+    needs: [bootstrap, plugin_bytes, coordinated, installed]
+    if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open the incident
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: gh issue create --repo "$GITHUB_REPOSITORY" --title "Main installed acceptance failed at ${GITHUB_SHA::10}" --body "Installed acceptance failed on main after merge ($RUN_URL). If a hotfix release already published these inputs, treat this as a release incident. Do not rerun blindly; record the cause."
