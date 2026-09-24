@@ -268,7 +268,7 @@ in the cell's `requests.json` artifact.
 | Mode | Network | Expected |
 | --- | --- | --- |
 | `normal` | GitHub and mirror reachable | pass |
-| `github-blocked` | direct TLS to github.com / *.githubusercontent.com is reset | <=3.0.19: known failure at check/download; 3.0.20+: known failure at check until `mirrorFeedFixedIn` (see below), then pass via the mirror |
+| `github-blocked` | direct TLS to github.com / *.githubusercontent.com is reset | <=3.0.19: known failure at check/download; 3.0.20/3.0.21: known failure at check (see below); 3.0.22+: pass via the mirror |
 | `system-proxy` | GitHub only through the Windows system proxy (Chromium); direct connections reset | <=3.0.19: known failure at download (their pinned verifier fetches `agentrouter-update.json` with Node's fetch, the 3.0.14 -> 3.0.20 field failure); >=3.0.20: pass |
 | `faults` (newest baseline only) | normal, one installer transfer dropped midway; if the baseline prepared the next runtime, its first start is made to fail | the update completes (<=3.0.19 after one user retry, >=3.0.20 without); a failed prepared runtime falls back to the previous Profile and ends usable |
 
@@ -283,8 +283,8 @@ GitHub is blocked. electron-updater requests `latest.yml?noCache=<random>` and
 `update-transport.mjs` matches the feed URL exactly, so the feed never goes
 mirror-first (the manifest, blockmaps and installer do). An installed baseline's
 check cannot be fixed by a newer candidate, so this is a documented known failure
-for those baselines; set `mirrorFeedFixedIn` in `assembly/update-matrix/plan.mjs`
-to the first release carrying the adapter fix so later baselines must pass.
+for those two baselines. The adapter fix (agentrouter-desktop#58) ships in 3.0.22
+(`mirrorFeedFixedIn` in `assembly/update-matrix/plan.mjs`); 3.0.22+ must pass.
 
 Old baselines build their runtime on their first launch (3-9 minutes on hosted
 workers; their installers do not prepare it), so a cell takes 6-13 minutes. If

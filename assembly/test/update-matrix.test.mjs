@@ -29,8 +29,9 @@ test('only baselines before the mirror transport may fail without direct GitHub,
   assert.deepEqual(expectationFor('3.0.19', 'github-blocked'), { expected: 'known-failure', knownFailureSteps: ['check', 'download'] })
   assert.deepEqual(expectationFor('3.0.14', 'system-proxy'), { expected: 'known-failure', knownFailureSteps: ['download'] })
   for (const mode of ['normal', 'system-proxy', 'faults']) assert.equal(expectationFor('3.0.20', mode).expected, 'pass', mode)
-  // 3.0.20+ check latest.yml?noCache=... against GitHub only until the adapter fix ships.
+  // 3.0.20 and 3.0.21 check latest.yml?noCache=... against GitHub only; fixed in 3.0.22.
   assert.deepEqual(expectationFor('3.0.21', 'github-blocked'), { expected: 'known-failure', knownFailureSteps: ['check'] })
+  for (const mode of ['normal', 'github-blocked', 'system-proxy', 'faults']) assert.equal(expectationFor('3.0.22', mode).expected, 'pass', mode)
   assert.throws(() => expectationFor('3.0.20', 'offline'))
 })
 
