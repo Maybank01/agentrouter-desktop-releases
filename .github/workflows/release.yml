@@ -267,7 +267,9 @@ jobs:
     name: Select reusable installed acceptance evidence
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && (inputs.publish || inputs.rehearse_signed) && inputs.resume_signed_run == ''
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Includes the bounded npm wait (PLUGIN_WAIT_MINUTES=20) for a release
+    # dispatched as soon as the plugin authorization merges.
+    timeout-minutes: 25
     permissions:
       contents: read
       actions: read
