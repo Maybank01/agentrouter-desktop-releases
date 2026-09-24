@@ -89,7 +89,12 @@ assert.ok(installer && paths.includes('latest.yml'))
 const feedFile = join(output, 'latest.yml')
 const feedData = loadYaml(readFileSync(feedFile, 'utf8'))
 assert.equal(feedData.version, candidate.input.productVersion)
+// The runtime identity lets a running release skip background preparation when
+// the update keeps an identical runtime; the target still verifies its own seed.
+const seedRelease = JSON.parse(readFileSync(join(candidate.output, 'resources/seed/desktop-release.json'), 'utf8'))
 feedData.agentrouter = { pluginVersion: candidate.input.plugin.version,
+  runtime: { fingerprint: seedRelease.runtimeFingerprint, dshVersion: seedRelease.version,
+    managedPlugins: seedRelease.managedPlugins ?? [] },
   releaseNotes: releaseHistory([...(candidate.input.releaseNotes ?? []),
     ...JSON.parse(readFileSync(join(directory, 'release-history.json'), 'utf8'))], candidate.input.productVersion) }
 writeFileSync(feedFile, dumpYaml(feedData))

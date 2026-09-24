@@ -3,5 +3,13 @@
   "candidateOnly": true,
   "productVersion": "3.0.2",
   "dshVersion": "0.1.5-rc.3",
+  "plugin": {
+    "name": "@agentrouter-top/dsh-codex",
+    "version": "0.16.0",
+    "filename": "agentrouter-top-dsh-codex-0.16.0.tgz",
+    "size": 344338,
+    "sha256": "59ef5253f8d8315fa5c527c13e3b5cb9b7725433a9241a9f3c98d054ecf95a34",
+    "integrity": "sha512-76gtCCtO5MVtw12mDzgVRupbMkcwIQAkwkUma2YR64SIM3rdCrsTyszYklGMvwIG8/PkfgOAELnWFf4W5byf7g=="
+  },
   "updateUrl": "https://github.com/Maybank01/agentrouter-desktop-releases/releases/latest/download/"
 }

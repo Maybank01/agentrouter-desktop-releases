@@ -360,16 +360,17 @@ index d057d6d..970a2b5 100644
    readonly dshVersion: string
  } | {
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..886d402 100644
+index 8bc9fdc..9399933 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
-@@ -1,16 +1,18 @@
+@@ -1,16 +1,19 @@
  /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
  
 -import { readFile, writeFile } from 'node:fs/promises'
 -import { extname, join, normalize, resolve, sep } from 'node:path'
++import { readFileSync } from 'node:fs'
 +import { mkdir, readFile, writeFile } from 'node:fs/promises'
-+import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
++import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path'
  import { fileURLToPath } from 'node:url'
  import {
    app,
@@ -384,7 +385,7 @@ index 8bc9fdc..886d402 100644
  } from 'electron'
  import { resolveDesktopPaths } from './paths.ts'
  import { DesktopProjectManager, type DesktopProjectHooks } from './project-manager.ts'
-@@ -18,11 +20,18 @@ import { DesktopHostProcess } from './host-process.ts'
+@@ -18,11 +21,19 @@ import { DesktopHostProcess } from './host-process.ts'
  import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
  import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
  import { claimDesktopSingleInstance } from './single-instance.ts'
@@ -395,6 +396,7 @@ index 8bc9fdc..886d402 100644
 +import { installExternalWebNavigation } from './agentrouter-external-navigation.mjs'
 +import { installUpdateExitHandler } from './agentrouter-update-exit.mjs'
 +import { verifyRuntimeExecutables, isRuntimeStartupFailure, runtimeRecoveryDialog, repairInstallerUrl, monitorStartupResponsiveness } from './agentrouter-runtime-recovery.mjs'
++import { prepareDownloadedRelease, runtimeChanged } from './agentrouter-update-runtime.mjs'
  
  const SCHEME = 'dsh-app'
  let focusPrimaryWindow = (): void => {}
@@ -403,7 +405,7 @@ index 8bc9fdc..886d402 100644
  function errorOf(reason: unknown, fallback: string): Error {
    return reason instanceof Error ? reason : new Error(fallback)
  }
-@@ -43,8 +52,9 @@ const MIME: Readonly<Record<string, string>> = {
+@@ -43,8 +54,9 @@ const MIME: Readonly<Record<string, string>> = {
    '.css': 'text/css; charset=utf-8',
    '.html': 'text/html; charset=utf-8',
    '.js': 'text/javascript; charset=utf-8',
@@ -413,7 +415,7 @@ index 8bc9fdc..886d402 100644
  
  interface RuntimeResources {
    readonly node: string
-@@ -78,10 +88,13 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+@@ -78,10 +90,13 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
    }
    return port
  }
@@ -428,7 +430,7 @@ index 8bc9fdc..886d402 100644
      height: 840,
      minWidth: 880,
      minHeight: 600,
-@@ -93,11 +106,20 @@ function createWindow(preload: string): BrowserWindow {
+@@ -93,11 +108,20 @@ function createWindow(preload: string): BrowserWindow {
        sandbox: true,
        webSecurity: true,
      },
@@ -452,7 +454,7 @@ index 8bc9fdc..886d402 100644
    return window
  }
  
-@@ -130,15 +152,17 @@ async function serveShellAsset(request: Request): Promise<Response> {
+@@ -130,15 +154,17 @@ async function serveShellAsset(request: Request): Promise<Response> {
    }
  }
  
@@ -471,7 +473,7 @@ index 8bc9fdc..886d402 100644
    let mainWindow: BrowserWindow | undefined
    let pluginWindow: BrowserWindow | undefined
    let shellInstallerOwnsQuit = false
-@@ -146,20 +170,87 @@ async function main(): Promise<void> {
+@@ -146,20 +172,89 @@ async function main(): Promise<void> {
    const locale = resolveDesktopLocale(app.getLocale())
    const messages = locale.messages
    const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
@@ -481,10 +483,12 @@ index 8bc9fdc..886d402 100644
 +  const chinese = app.getLocale().startsWith('zh')
 +  const labels: Record<string, string> = chinese ? {
 +    checking: '正在检查更新内容…', preparing: '正在准备运行环境…', installing: '正在应用更新…',
-+    validating: '正在确认更新结果…', reusing: '正在完成更新…', starting: '正在启动 AgentRouter…',
++    validating: '正在确认更新结果…', reusing: '正在完成更新…', activating: '正在切换到新版本…',
++    starting: '正在启动 AgentRouter…',
 +  } : {
 +    checking: 'Checking update contents…', preparing: 'Preparing the runtime…', installing: 'Applying the update…',
-+    validating: 'Checking the updated runtime…', reusing: 'Finishing the update…', starting: 'Starting AgentRouter…',
++    validating: 'Checking the updated runtime…', reusing: 'Finishing the update…', activating: 'Switching to the new version…',
++    starting: 'Starting AgentRouter…',
 +  }
 +  protocol.handle(SCHEME, (request) => {
 +    const url = new URL(request.url)
@@ -560,21 +564,45 @@ index 8bc9fdc..886d402 100644
    }
    const hooks: DesktopProjectHooks = {
      healthCheck: async (projectDir) => {
-@@ -202,35 +293,41 @@ async function main(): Promise<void> {
+@@ -201,36 +296,70 @@ async function main(): Promise<void> {
+       host = await startHost()
      },
    }
  
++  const startupHooks: DesktopProjectHooks = {
++    progress,
++    ...hooks,
++    beforeActivate: async () => {},
++    afterActivate: async () => {},
++  }
++  let preparedRuntime = false
++  let preparedFallback: string | undefined
    if (development === undefined) {
+-    await manager.applyRelease(resources.seed, app.getVersion(), {
+-      ...hooks,
+-      beforeActivate: async () => {},
+-      afterActivate: async () => {},
+-    })
 +    await verifyRuntimeExecutables(resources)
-     await manager.applyRelease(resources.seed, app.getVersion(), {
-+      progress,
-       ...hooks,
-       beforeActivate: async () => {},
-       afterActivate: async () => {},
-     })
-   }
++    await manager.applyRelease(resources.seed, app.getVersion(), startupHooks)
++    preparedRuntime = manager.activatedPrepared
++  }
 +  await progress('starting')
-   host = await startHost()
++  try {
++    host = await startHost()
++  } catch (error) {
++    // A runtime prepared ahead of time is proved by its first start. If it cannot
++    // start, return to the previous profile and rebuild from the verified seed.
++    if (!preparedRuntime) throw error
++    preparedFallback = error instanceof Error ? error.message.slice(0, 2000) : String(error)
++    events.push({ stage: 'prepared-fallback', elapsedMs: Date.now() - started })
++    await manager.revertActivation()
++    await manager.applyRelease(resources.seed, app.getVersion(), startupHooks, { usePrepared: false })
++    preparedRuntime = false
++    await progress('starting')
++    host = await startHost()
+   }
+-  host = await startHost()
  
    const updates = new DesktopUpdateCoordinator(
      publishUpdate,
@@ -588,6 +616,17 @@ index 8bc9fdc..886d402 100644
        await active?.stop()
      },
    )
++  if (development === undefined) {
++    // A downloaded release builds its own runtime beside this one while it keeps
++    // running, so the restart only switches profiles. Failure leaves startup to rebuild.
++    updates.prepareRuntime = async (version, files, releaseInfo) => {
++      if (manager.preparedFor(version)) return { outcome: 'prepared', reused: true }
++      const current = JSON.parse(readFileSync(join(resources.seed, 'desktop-release.json'), 'utf8'))
++      if (!runtimeChanged(current, releaseInfo, version)) return { outcome: 'current' }
++      return prepareDownloadedRelease({ installer: files.find(file => file.toLowerCase().endsWith('.exe')), version,
++        root: paths.root, executableName: basename(process.execPath) })
++    }
++  }
  
 -  protocol.handle(SCHEME, (request) => {
 -    const url = new URL(request.url)
@@ -609,7 +648,7 @@ index 8bc9fdc..886d402 100644
      assertDesktopSender(event, ['shell'])
      if (development !== undefined) {
        throw new Error('dsh desktop: plugin package changes require a packaged application')
-@@ -271,8 +368,9 @@ async function main(): Promise<void> {
+@@ -271,8 +400,9 @@ async function main(): Promise<void> {
    })
  
    const checkAndPrompt = async (manual: boolean): Promise<void> => {
@@ -619,7 +658,7 @@ index 8bc9fdc..886d402 100644
        if (manual) {
          await dialog.showMessageBox({
            type: 'error',
-@@ -281,9 +379,9 @@ async function main(): Promise<void> {
+@@ -281,9 +411,9 @@ async function main(): Promise<void> {
          })
        }
        return
@@ -630,7 +669,32 @@ index 8bc9fdc..886d402 100644
          await dialog.showMessageBox({
            type: 'info',
            title: messages.updateCheckTitle,
-@@ -316,11 +414,10 @@ async function main(): Promise<void> {
+@@ -301,26 +431,32 @@ async function main(): Promise<void> {
+       defaultId: 0,
+       cancelId: 1,
+     })
+     if (result.response !== 0) return
+-    const installed = await updates.install()
+-    if (installed.phase === 'error') {
+-      await dialog.showMessageBox({
++    // An interrupted download keeps its bytes; offer to continue instead of a dead end.
++    for (;;) {
++      const installed = await updates.install()
++      if (installed.phase !== 'error') return
++      const retry = await dialog.showMessageBox({
+         type: 'error',
+         title: messages.updateFailedTitle,
+         message: installed.message ?? messages.unknownError,
++        buttons: chinese ? ['继续下载', '稍后'] : ['Continue download', 'Later'],
++        defaultId: 0,
++        cancelId: 1,
++        noLink: true,
+       })
++      if (retry.response !== 0) return
+     }
+   }
+ 
+   const openPluginWindow = (): void => {
      if (pluginWindow !== undefined && !pluginWindow.isDestroyed()) {
        pluginWindow.focus()
        return
@@ -643,7 +707,7 @@ index 8bc9fdc..886d402 100644
      pluginWindow.once('closed', () => { pluginWindow = undefined })
      void pluginWindow.loadURL(`${SCHEME}://shell/plugin-manager.html`)
    }
-@@ -333,38 +430,24 @@ async function main(): Promise<void> {
+@@ -333,65 +469,148 @@ async function main(): Promise<void> {
          accelerator: 'CmdOrCtrl+,',
          enabled: development === undefined,
          click: openPluginWindow,
@@ -684,12 +748,15 @@ index 8bc9fdc..886d402 100644
 +  await writeFile(join(paths.root, 'startup.json'), JSON.stringify({ schemaVersion: 1,
 +    productVersion: app.getVersion(), startedAt: new Date(started).toISOString(), visibleMs, events,
 +    ready: true, durationMs: Date.now() - started, maxMainThreadDelayMs: stopStartupHeartbeat(),
-+    rebuilt: events.some(event => event.stage === 'installing') }))
++    rebuilt: events.some(event => event.stage === 'installing'), preparedRuntime,
++    ...(preparedFallback === undefined ? {} : { preparedFallback }) }))
    publishUpdate(updateState)
++  // Replaced runtimes are deleted only after the window is usable.
++  void manager.cleanupTrash()
    setTimeout(() => { void checkAndPrompt(false) }, 10_000)
  
    app.on('activate', () => {
-@@ -372,26 +455,67 @@ async function main(): Promise<void> {
+     if (BrowserWindow.getAllWindows().length === 0) focusPrimaryWindow()
    })
    app.on('window-all-closed', () => {
      if (process.platform !== 'darwin') app.quit()
@@ -705,10 +772,64 @@ index 8bc9fdc..886d402 100644
 +
  }
  
- const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
- 
-+if (ownsDesktopInstance) installUpdateExitHandler({ app, autoUpdater: nativeAutoUpdater, BrowserWindow })
+-const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
++/**
++ * Headless runtime preparation, so launching never installs:
++ * `--agentrouter-prepare-runtime` is run by the installer and activates this
++ * release's runtime with a real host probe; `--agentrouter-prepare-update` is run
++ * from a staged copy of a downloaded release and only builds its prepared slot
++ * beside the running release. Neither opens a window or claims the instance lock.
++ */
++async function prepareRuntime(update: boolean): Promise<number> {
++  const started = Date.now()
++  const resources = runtimeResources()
++  const paths = resolveDesktopPaths()
++  const manager = new DesktopProjectManager(paths, resources)
++  const events: { stage: string; elapsedMs: number }[] = []
++  const receipt = join(paths.root, update ? 'prepared-update.json' : 'installer-prepare.json')
++  const record = (value: Record<string, unknown>) => writeFile(receipt, JSON.stringify({ schemaVersion: 1,
++    productVersion: app.getVersion(), startedAt: new Date(started).toISOString(), durationMs: Date.now() - started, events, ...value }))
++  try {
++    await mkdir(paths.root, { recursive: true })
++    await verifyRuntimeExecutables(resources)
++    let outcome: string
++    if (update) {
++      outcome = await manager.prepareRelease(resources.seed, app.getVersion())
++    } else {
++      const activated = await manager.applyRelease(resources.seed, app.getVersion(), {
++        progress: async (stage) => { events.push({ stage, elapsedMs: Date.now() - started }) },
++        healthCheck: async (projectDir) => {
++          const probe = new DesktopHostProcess(resources.node, projectDir)
++          try { await probe.start() } finally { await probe.stop().catch(() => undefined) }
++        },
++        beforeActivate: async () => {},
++        afterActivate: async () => {},
++      })
++      outcome = activated ? 'installed' : 'current'
++      await manager.cleanupTrash()
++    }
++    await record({ outcome })
++    return 0
++  } catch (error) {
++    await record({ outcome: 'failed', message: (error instanceof Error ? error.message : String(error)).slice(0, 4000) }).catch(() => undefined)
++    return 1
++  }
++}
 +
++const prepareMode = process.argv.find(value => value === '--agentrouter-prepare-runtime' || value === '--agentrouter-prepare-update')
++if (prepareMode !== undefined) {
++  app.disableHardwareAcceleration()
++  // Completed work quits normally so the stopped probe's pipes close cleanly (an
++  // immediate app.exit can abort libuv teardown); a failure exits with code 1.
++  const exit = (code: number): void => { setTimeout(() => { if (code === 0) app.quit(); else app.exit(code) }, 200) }
++  void app.whenReady().then(() => prepareRuntime(prepareMode === '--agentrouter-prepare-update'))
++    .then(exit, () => { exit(1) })
++}
++
++const ownsDesktopInstance = prepareMode === undefined && claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
++
++if (ownsDesktopInstance) installUpdateExitHandler({ app, autoUpdater: nativeAutoUpdater, BrowserWindow })
+ 
  if (ownsDesktopInstance) void app.whenReady().then(main).catch(async (error: unknown) => {
 +  stopStartupHeartbeat()
    const message = error instanceof Error ? error.message : String(error)
@@ -767,7 +888,7 @@ index 8bc9fdc..886d402 100644
    app.exit(1)
  })
 diff --git a/apps/desktop/src/project-manager.ts b/apps/desktop/src/project-manager.ts
-index b9b94f7..1231db8 100644
+index b9b94f7..037461f 100644
 --- a/apps/desktop/src/project-manager.ts
 +++ b/apps/desktop/src/project-manager.ts
 @@ -15,14 +15,16 @@ import {
@@ -824,12 +945,47 @@ index b9b94f7..1231db8 100644
  
  /** Hooks that bind project replacement to backend lifecycle and health. */
  export interface DesktopProjectHooks {
-+  progress?(stage: 'checking' | 'preparing' | 'installing' | 'validating' | 'reusing'): Promise<void>
++  progress?(stage: 'checking' | 'preparing' | 'installing' | 'validating' | 'reusing' | 'activating'): Promise<void>
    /** Prove the staged dependency graph while the active backend is stopped. */
    healthCheck(projectDir: string): Promise<void>
    /** Stop the active backend and await process exit before directory moves. */
    beforeActivate(): Promise<void>
-@@ -108,8 +119,19 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|
+@@ -92,8 +103,34 @@ export type DesktopProjectMutation =
+   | { readonly type: 'plugin-add'; readonly spec: string }
+   | { readonly type: 'plugin-remove'; readonly name: string }
+   | { readonly type: 'plugin-update'; readonly name: string; readonly version: string }
+ 
++/** Commit marker of a runtime prepared ahead of the startup that activates it. */
++interface DesktopPreparedRuntime {
++  readonly schemaVersion: 1
++  readonly productVersion: string
++  /** SHA-256 of the seed integrity inventory the slot was built from. */
++  readonly seed: string
++  /** Digest of the active profile's transaction files the slot was derived from. */
++  readonly source: string
++  readonly preparedAt: string
++}
++
++/** Outcome of preparing a release while another release keeps running. */
++export type DesktopPrepareOutcome = 'prepared' | 'current' | 'unsupported'
++
++/** Classification of the active profile against one target release. */
++interface DesktopProfileState {
++  readonly legacy: ReturnType<typeof legacyProfile>
++  readonly previousRelease: DesktopRelease | undefined
++  readonly currentRelease: boolean
++}
++
++/** Transaction files whose content decides the prepared dependency graph. */
++const PREPARED_SOURCE_FILES = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'desktop-release.json', DESKTOP_PACKAGE_SET_FILE] as const
++/** User settings copied from the active profile at activation, never from preparation time. */
++const PROFILE_SETTINGS_FILES = ['cordis.patch.yml'] as const
++
+ interface DesktopSeedIntegrityRecord {
+   readonly path: string
+   readonly bytes: number
+   readonly sha256: string
+@@ -108,8 +145,19 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|
  const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
  const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
  const DESKTOP_REGISTRY = 'https://registry.npmjs.org/'
@@ -849,7 +1005,7 @@ index b9b94f7..1231db8 100644
    return reason instanceof Error ? reason : new Error(fallback)
  }
  
-@@ -120,18 +142,19 @@ function writeJson(path: string, value: unknown): void {
+@@ -120,18 +168,19 @@ function writeJson(path: string, value: unknown): void {
  function readJson(path: string): unknown {
    return JSON.parse(readFileSync(path, 'utf8'))
  }
@@ -871,7 +1027,7 @@ index b9b94f7..1231db8 100644
  
  function releaseFile(projectDir: string): DesktopRelease {
    return parseDesktopRelease(readJson(join(projectDir, 'desktop-release.json')))
-@@ -178,17 +201,66 @@ export function packageNameFromSpec(spec: string): string | undefined {
+@@ -178,17 +227,66 @@ export function packageNameFromSpec(spec: string): string | undefined {
    if (versionAt !== -1) assertVersion(spec.slice(versionAt + 1))
    return name
  }
@@ -940,7 +1096,33 @@ index b9b94f7..1231db8 100644
  
  function copyMetadata(source: string, target: string): void {
    mkdirSync(target, { recursive: true, mode: 0o700 })
-@@ -264,9 +336,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
+@@ -227,8 +325,25 @@ function seedFiles(root: string): readonly DesktopSeedIntegrityRecord[] {
+   visit(root)
+   return files.sort((left, right) => left.path.localeCompare(right.path))
+ }
+ 
++/** Cheap identity of one packaged seed: its complete verified file inventory. */
++export function seedIdentity(seedDir: string): string {
++  return createHash('sha256').update(readFileSync(join(seedDir, 'integrity.json'))).digest('hex')
++}
++
++/** Digest of the transaction files a prepared runtime was derived from. */
++function profileSourceDigest(projectDir: string): string {
++  const hash = createHash('sha256')
++  for (const name of PREPARED_SOURCE_FILES) {
++    const path = join(projectDir, name)
++    hash.update(`${name}\0`)
++    hash.update(existsSync(path) ? readFileSync(path) : Buffer.from('\0absent'))
++    hash.update('\0')
++  }
++  return hash.digest('hex')
++}
++
+ /** Verify the packaged offline seed before any content enters writable desktop state. */
+ export function verifySeedIntegrity(seedDir: string): void {
+   const integrityPath = join(seedDir, 'integrity.json')
+   const integrity = readJson(integrityPath)
+@@ -264,9 +379,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
    const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
    const expectedOverrides = desktopCorePackageOverrides(packageSet)
    if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
@@ -951,7 +1133,7 @@ index b9b94f7..1231db8 100644
    }
    return manifest
  }
-@@ -284,9 +356,87 @@ function profilePluginNames(projectDir: string): readonly string[] {
+@@ -284,9 +399,87 @@ function profilePluginNames(projectDir: string): readonly string[] {
    return plugins
  }
  
@@ -1040,7 +1222,7 @@ index b9b94f7..1231db8 100644
  
  function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
    const manifest = projectManifest(projectDir)
-@@ -325,8 +475,49 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
+@@ -325,22 +518,132 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
    return { name: requestedName, version: manifest.version }
  }
  
@@ -1088,9 +1270,12 @@ index b9b94f7..1231db8 100644
 +
  export class DesktopProjectManager {
    private lockDescriptor: number | undefined
++  /** Set when the last applyRelease activated a prepared runtime without a startup probe. */
++  private preparedActivation = false
  
    /**
-@@ -335,12 +526,79 @@ export class DesktopProjectManager {
+    * @param paths - Electron-owned package state and reserved desktop profile paths.
+    * @param runtime - absolute bundled Node.js and pnpm entry paths.
     */
    constructor(
      readonly paths: DesktopPaths,
@@ -1171,7 +1356,7 @@ index b9b94f7..1231db8 100644
      const value = readJson(this.paths.pending)
      if (!isRecord(value) || value.schemaVersion !== 1
        || typeof value.id !== 'string' || typeof value.stagingProfile !== 'string'
-@@ -355,11 +613,11 @@ export class DesktopProjectManager {
+@@ -355,11 +658,11 @@ export class DesktopProjectManager {
        step: value.step,
      }
      if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
@@ -1185,7 +1370,7 @@ index b9b94f7..1231db8 100644
    }
  
    /** Read the active desktop plugin inventory. */
-@@ -386,71 +644,162 @@ export class DesktopProjectManager {
+@@ -386,71 +689,366 @@ export class DesktopProjectManager {
  
    /** Read the release version applied to the active desktop project. */
    releaseVersion(): string {
@@ -1195,59 +1380,103 @@ index b9b94f7..1231db8 100644
 +    return release.productVersion ?? release.version
    }
  
-   /** Install or reconcile the active project to the Electron package's exact release. */
-   async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
+-  /** Install or reconcile the active project to the Electron package's exact release. */
+-  async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
++  /** Runtime slot built ahead of the startup that activates it. */
++  private get preparedRoot(): string { return join(this.paths.root, 'prepared') }
++
++  /** Replaced profiles and discarded slots, deleted after startup completes. */
++  private get trashRoot(): string { return join(this.paths.root, 'trash') }
++
++  /** True when the preceding applyRelease activated a prepared runtime. */
++  get activatedPrepared(): boolean { return this.preparedActivation }
++
++  private readTarget(seedDir: string, productVersion: string): DesktopRelease {
++    const target = releaseFile(seedDir)
++    verifyDesktopCorePackageSet(seedDir, target.version)
++    if ((target.productVersion ?? target.version) !== productVersion) {
++      throw new Error(`desktop project: seed ${target.version} does not match Electron ${productVersion}`)
++    }
++    return target
++  }
++
++  private profileState(target: DesktopRelease): DesktopProfileState {
++    const productVersion = target.productVersion ?? target.version
++    const legacy = legacyProfile(this.paths.profile)
++    const previousRelease = !legacy && existsSync(this.paths.profile) ? releaseFile(this.paths.profile) : undefined
++    const currentRelease = previousRelease !== undefined && this.releaseVersion() === productVersion
++      && this.dshVersion() === target.version
++      && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version
++    return { legacy, previousRelease, currentRelease }
++  }
++
++  /** A shell-only update keeps an identical verified runtime. */
++  private async reusable(state: DesktopProfileState, seedDir: string, target: DesktopRelease): Promise<boolean> {
++    const previousRelease = state.previousRelease
++    // Older releases without a fingerprint take the migration path once.
++    if (state.currentRelease || previousRelease?.runtimeFingerprint === undefined
++      || previousRelease.runtimeFingerprint !== target.runtimeFingerprint
++      || previousRelease.version !== target.version
++      || previousRelease.nodeVersion !== target.nodeVersion
++      || previousRelease.pnpmVersion !== target.pnpmVersion
++      || JSON.stringify(previousRelease.managedPlugins) !== JSON.stringify(target.managedPlugins)
++      || this.dshVersion() !== target.version
++      || this.installedPackageVersion(DESKTOP_HOST_PACKAGE) !== target.version) return false
++    const currentPackages = verifyDesktopCorePackageSet(this.paths.profile, target.version)
++    const targetPackages = readDesktopCorePackageSet(seedDir, target.version)
++    const manifest = projectManifest(this.paths.profile)
++    const managedMatch = (target.managedPlugins ?? []).every(plugin =>
++      manifest.dependencies[plugin.name] === undefined || this.installedPackageVersion(plugin.name) === plugin.version)
++    return managedMatch && JSON.stringify(currentPackages) === JSON.stringify(targetPackages) && await this.usesBundledStore()
++  }
++
++  /**
++   * Install or reconcile the active project to the Electron package's exact release.
++   * Startup only checks and starts: a runtime prepared by the installer or during a
++   * background update is activated by directory renames; the seed is verified and
++   * materialized here only when no prepared runtime matches.
++   */
++  async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks,
++    options: { readonly usePrepared?: boolean } = {}): Promise<boolean> {
      return this.withLock(async () => {
 -      this.recover()
+-      verifySeedIntegrity(seedDir)
+-      const target = releaseFile(seedDir)
+-      verifyDesktopCorePackageSet(seedDir, target.version)
+-      if (target.version !== electronVersion) {
+-        throw new Error(`desktop project: seed ${target.version} does not match Electron ${electronVersion}`)
+-      }
+-      if (existsSync(this.paths.profile) && this.releaseVersion() === target.version
+-        && this.dshVersion() === target.version
+-        && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version) {
++      this.preparedActivation = false
 +      await this.recover()
 +      await hooks.progress?.('checking')
-       verifySeedIntegrity(seedDir)
-       const target = releaseFile(seedDir)
-       verifyDesktopCorePackageSet(seedDir, target.version)
--      if (target.version !== electronVersion) {
-+      const productVersion = target.productVersion ?? target.version
-+      if (productVersion !== electronVersion) {
-         throw new Error(`desktop project: seed ${target.version} does not match Electron ${electronVersion}`)
-       }
--      if (existsSync(this.paths.profile) && this.releaseVersion() === target.version
-+      const legacy = legacyProfile(this.paths.profile)
-+      const previousRelease = !legacy && existsSync(this.paths.profile) ? releaseFile(this.paths.profile) : undefined
-+      const currentRelease = previousRelease !== undefined && this.releaseVersion() === productVersion
-         && this.dshVersion() === target.version
--        && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version) {
-+        && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version
-+      if (currentRelease) {
++      const target = this.readTarget(seedDir, electronVersion)
++      const state = this.profileState(target)
++      if (state.currentRelease) {
          verifyDesktopCorePackageSet(this.paths.profile, target.version)
--        return false
 +        // An external install can rebuild the same release with another pnpm store.
 +        // Compare the actual link owner, not a pnpm version allowlist.
 +        if (await this.usesBundledStore()) return false
++      }
++      // A shell-only update must not reinstall an identical verified runtime.
++      if (await this.reusable(state, seedDir, target)) {
++        await hooks.progress?.('reusing')
++        const marker = join(this.paths.profile, 'desktop-release.json')
++        const temporary = marker + '.tmp'
++        writeJson(temporary, target)
++        renameSync(temporary, marker)
+         return false
        }
 -      this.mergeSeedPnpmState(seedDir)
-+      // A shell-only update must not reinstall an identical verified runtime.
-+      // Older releases without a fingerprint take the migration path once.
-+      if (!currentRelease && previousRelease?.runtimeFingerprint !== undefined
-+        && previousRelease.runtimeFingerprint === target.runtimeFingerprint
-+        && previousRelease.version === target.version
-+        && previousRelease.nodeVersion === target.nodeVersion
-+        && previousRelease.pnpmVersion === target.pnpmVersion
-+        && JSON.stringify(previousRelease.managedPlugins) === JSON.stringify(target.managedPlugins)
-+        && this.dshVersion() === target.version
-+        && this.installedPackageVersion(DESKTOP_HOST_PACKAGE) === target.version) {
-+        const currentPackages = verifyDesktopCorePackageSet(this.paths.profile, target.version)
-+        const targetPackages = readDesktopCorePackageSet(seedDir, target.version)
-+        const manifest = projectManifest(this.paths.profile)
-+        const managedMatch = (target.managedPlugins ?? []).every(plugin =>
-+          manifest.dependencies[plugin.name] === undefined || this.installedPackageVersion(plugin.name) === plugin.version)
-+        if (managedMatch && JSON.stringify(currentPackages) === JSON.stringify(targetPackages) && await this.usesBundledStore()) {
-+          await hooks.progress?.('reusing')
-+          const marker = join(this.paths.profile, 'desktop-release.json')
-+          const temporary = marker + '.tmp'
-+          writeJson(temporary, target)
-+          renameSync(temporary, marker)
-+          return false
-+        }
++      if (options.usePrepared !== false && !state.legacy && !state.currentRelease
++        && await this.activatePrepared(seedDir, target, hooks)) {
++        this.preparedActivation = true
++        return true
 +      }
++      // The seed is consumed from here on: prove the packaged bytes are complete.
++      verifySeedIntegrity(seedDir)
 +      await hooks.progress?.('preparing')
 +      await this.mergeSeedPnpmState(seedDir)
 +      await hooks.progress?.('installing')
@@ -1255,76 +1484,22 @@ index b9b94f7..1231db8 100644
        try {
 -        if (existsSync(this.paths.profile)) {
 -          const plugins = pluginRecords(this.paths.profile)
-+        if (currentRelease) {
-+          // Repair only the dependency layout. Keep the user's exact lock and bundles,
-+          // including managed plugins they removed, disabled plugins and their config.
-+          copyMetadata(this.paths.profile, stagingProfile)
-+          await this.prepareFromCache(stagingProfile, ['install', '--frozen-lockfile', '--trust-lockfile'])
-+        } else if (existsSync(this.paths.profile)) {
-+          const previous = legacy ? undefined : releaseFile(this.paths.profile)
-+          const previousManifest = legacy ? undefined : projectManifest(this.paths.profile)
-+          const core = previous ? new Set(readDesktopCorePackageSet(this.paths.profile, previous.version).packages.map(pkg => pkg.name)) : undefined
-+          const installed = legacy?.plugins ?? Object.keys(previousManifest!.dependencies)
-+            .filter(name => !core!.has(name)).map(name => inspectPlugin(this.paths.profile, name))
-+          const previousBundles = legacy?.bundles ?? previousManifest!.dsh.profile.bundles
-+          const disabled = new Set(installed.filter(plugin => !previousBundles.includes(plugin.name)).map(plugin => plugin.name))
-+          const managed = target.managedPlugins ?? []
-+          const userPlugins = installed.filter(plugin => !managed.some(entry => entry.name === plugin.name))
-+          // An explicitly removed managed plugin stays removed. A newly introduced
-+          // managed package is enabled once; ordinary user plugins keep their versions.
-+          const removed = managed.filter(plugin => (previous?.managedPlugins?.some(entry => entry.name === plugin.name)
-+            || (legacy && existsSync(join(this.paths.profile, 'agentrouter-preinstalled.json'))))
-+            && !installed.some(entry => entry.name === plugin.name))
-+          const plugins = [...managed.filter(plugin => !removed.includes(plugin)), ...userPlugins]
-           copyMetadata(seedDir, stagingProfile)
-           await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
+-          copyMetadata(seedDir, stagingProfile)
+-          await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
 -          if (plugins.length > 0) {
 -            await this.runPnpm(stagingProfile, [
-+          if (userPlugins.length > 0) {
-+            await this.prepareFromCache(stagingProfile, [
-               'add',
+-              'add',
 -              ...plugins.map(plugin => `${plugin.name}@${plugin.version}`),
-+              ...userPlugins.map(plugin => `${plugin.name}@${plugin.version}`),
-               '--save-exact',
+-              '--save-exact',
 -              '--offline',
-+              '--lockfile-only',
-+              // The preceding install verified this seed's lock. Keep normal
-+              // resolver checks for added packages without rechecking every seed entry.
-+              '--trust-lockfile',
-             ])
+-            ])
 -            writeProfilePlugins(stagingProfile, plugins)
-+          }
-+          for (const plugin of removed) await this.prepareFromCache(stagingProfile, ['remove', plugin.name, '--lockfile-only', '--trust-lockfile'])
-+          if (userPlugins.length > 0 || removed.length > 0) {
-+            await this.prepareFromCache(stagingProfile, ['install', '--frozen-lockfile', '--trust-lockfile'])
-+          }
-+          writeProfilePlugins(stagingProfile, plugins)
-+          if (disabled.size > 0) {
-+            const manifest = projectManifest(stagingProfile)
-+            writeJson(join(stagingProfile, 'package.json'), { ...manifest,
-+              dsh: { ...manifest.dsh, profile: { ...manifest.dsh.profile,
-+                bundles: manifest.dsh.profile.bundles.filter(name => !disabled.has(name)) } } })
-+          }
-+          const userPatch = join(this.paths.profile, 'cordis.patch.yml')
-+          if (existsSync(userPatch)) copyFileSync(userPatch, join(stagingProfile, 'cordis.patch.yml'))
-+          if (legacy) {
-+            // Retain installed-but-disabled bundles and standalone profile config.
-+            const config = join(this.paths.profile, 'cordis.yml')
-+            if (existsSync(config)) copyFileSync(config, join(stagingProfile, 'cordis.yml'))
-+            // Keep a durable metadata backup beyond the next transaction's rollback
-+            // slot. Do not follow module fallback links into another installation.
-+            const backup = join(this.paths.root, 'legacy-profile-backups', randomUUID())
-+            cpSync(this.paths.profile, backup, { recursive: true, filter: path =>
-+              !relative(this.paths.profile, path).split(sep).includes('node_modules')
-+              && !lstatSync(path).isSymbolicLink() })
-+            writeJson(join(stagingProfile, 'agentrouter-legacy-migration.json'), {
-+              schemaVersion: 1, source: 'dsh-profile-desktop', productVersion, backup,
-+            })
-           }
-         } else {
-           copyMetadata(seedDir, stagingProfile)
-           await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
-         }
+-          }
+-        } else {
+-          copyMetadata(seedDir, stagingProfile)
+-          await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
+-        }
++        await this.buildStaging(seedDir, target, state, stagingProfile)
 +        await hooks.progress?.('validating')
          await hooks.healthCheck(stagingProfile)
          await this.activate(stagingProfile, hooks)
@@ -1337,6 +1512,237 @@ index b9b94f7..1231db8 100644
      })
    }
  
++  /**
++   * Build the target release's runtime beside the active profile, which may keep
++   * running. Only a later startup of the same release activates the slot, and only
++   * while the active profile still matches the one it was derived from.
++   */
++  async prepareRelease(seedDir: string, productVersion: string): Promise<DesktopPrepareOutcome> {
++    return this.withLock(async () => {
++      await this.recover()
++      const target = this.readTarget(seedDir, productVersion)
++      if (!existsSync(this.paths.profile)) return 'unsupported'
++      const state = this.profileState(target)
++      // Legacy migration keeps its one-time startup transaction and backup.
++      if (state.legacy) return 'unsupported'
++      if (state.currentRelease || await this.reusable(state, seedDir, target)) return 'current'
++      verifySeedIntegrity(seedDir)
++      await this.discard(this.preparedRoot)
++      const source = profileSourceDigest(this.paths.profile)
++      await this.mergeSeedPnpmState(seedDir)
++      const stagingProfile = this.newStagingProfile()
++      try {
++        await this.buildStaging(seedDir, target, state, stagingProfile)
++        this.assertRuntime(stagingProfile, target)
++        mkdirSync(this.preparedRoot, { recursive: true, mode: 0o700 })
++        await renameWithTransientRetry(stagingProfile, join(this.preparedRoot, 'profile'))
++        await removeOwnedDirectory(dirname(stagingProfile))
++        // The marker is written last; a slot without it is never activated.
++        writeJson(join(this.preparedRoot, 'prepared.json'), {
++          schemaVersion: 1, productVersion, seed: seedIdentity(seedDir), source,
++          preparedAt: new Date().toISOString(),
++        } satisfies DesktopPreparedRuntime)
++        return 'prepared'
++      } catch (error) {
++        await removeOwnedDirectory(stagingProfile)
++        await this.discard(this.preparedRoot)
++        throw error
++      }
++    })
++  }
++
++  /** Whether a prepared runtime for this release still matches the active profile. */
++  preparedFor(productVersion: string): boolean {
++    const prepared = this.readPrepared()
++    return prepared !== undefined && prepared.productVersion === productVersion
++      && existsSync(this.paths.profile) && prepared.source === profileSourceDigest(this.paths.profile)
++  }
++
++  private readPrepared(): DesktopPreparedRuntime | undefined {
++    const marker = join(this.preparedRoot, 'prepared.json')
++    if (!existsSync(marker) || !existsSync(join(this.preparedRoot, 'profile'))) return undefined
++    try {
++      const value = readJson(marker)
++      if (isRecord(value) && value.schemaVersion === 1 && typeof value.productVersion === 'string'
++        && typeof value.seed === 'string' && typeof value.source === 'string' && typeof value.preparedAt === 'string') {
++        return value as unknown as DesktopPreparedRuntime
++      }
++    } catch { /* An unreadable marker is an uncommitted slot. */ }
++    return undefined
++  }
++
++  /** Structural proof of a prepared graph; the first host start is its runtime proof. */
++  private assertRuntime(projectDir: string, target: DesktopRelease): void {
++    const manifest = projectManifest(projectDir)
++    for (const name of [DSH_PACKAGE, DESKTOP_HOST_PACKAGE]) {
++      const installed = readJson(join(projectDir, 'node_modules', ...name.split('/'), 'package.json'))
++      if (!isRecord(installed) || installed.version !== target.version) {
++        throw new Error(`desktop project: prepared runtime has an unexpected ${name}`)
++      }
++    }
++    if (!existsSync(join(projectDir, 'node_modules', ...DESKTOP_HOST_PACKAGE.split('/'), 'lib', 'index.js'))) {
++      throw new Error('desktop project: prepared runtime has no desktop host entry')
++    }
++    for (const plugin of target.managedPlugins ?? []) {
++      if (manifest.dependencies[plugin.name] !== undefined && inspectPlugin(projectDir, plugin.name).version !== plugin.version) {
++        throw new Error(`desktop project: prepared runtime has an unexpected ${plugin.name}`)
++      }
++    }
++    pluginRecords(projectDir)
++  }
++
++  private async activatePrepared(seedDir: string, target: DesktopRelease, hooks: DesktopProjectHooks): Promise<boolean> {
++    const prepared = this.readPrepared()
++    if (prepared === undefined) {
++      if (existsSync(this.preparedRoot)) await this.discard(this.preparedRoot)
++      return false
++    }
++    const slot = join(this.preparedRoot, 'profile')
++    const usable = prepared.productVersion === (target.productVersion ?? target.version)
++      && prepared.seed === seedIdentity(seedDir)
++      && existsSync(this.paths.profile) && prepared.source === profileSourceDigest(this.paths.profile)
++    if (!usable) {
++      // Another release, another seed, or plugin changes after preparation.
++      await this.discard(this.preparedRoot)
++      return false
++    }
++    try {
++      this.assertRuntime(slot, target)
++    } catch {
++      await this.discard(this.preparedRoot)
++      return false
++    }
++    await hooks.progress?.('activating')
++    // Settings edited after preparation belong to the user, not to the slot.
++    for (const name of PROFILE_SETTINGS_FILES) {
++      const current = join(this.paths.profile, name)
++      const staged = join(slot, name)
++      if (existsSync(current)) copyFileSync(current, staged)
++      else if (existsSync(staged)) unlinkSync(staged)
++    }
++    // Reuse the journaled activation: the slot becomes an ordinary staging profile.
++    const stagingProfile = join(this.paths.staging, randomUUID(), 'profile')
++    mkdirSync(dirname(stagingProfile), { recursive: true, mode: 0o700 })
++    await renameWithTransientRetry(slot, stagingProfile)
++    await this.discard(this.preparedRoot)
++    await this.activate(stagingProfile, hooks, { probed: false })
++    return true
++  }
++
++  /**
++   * Return to the profile replaced by the last activation, e.g. when a prepared
++   * runtime cannot start. The caller then rebuilds from the verified seed.
++   */
++  async revertActivation(): Promise<void> {
++    await this.withLock(async () => {
++      await this.recover()
++      if (!existsSync(this.paths.rollback)) throw new Error('desktop project: no previous profile to restore')
++      const failed = join(this.paths.staging, randomUUID(), 'profile')
++      mkdirSync(dirname(failed), { recursive: true, mode: 0o700 })
++      // recover() completes an interrupted revert exactly like an interrupted activation.
++      writeJson(this.paths.pending, { schemaVersion: 1, id: basename(dirname(failed)), stagingProfile: failed,
++        step: 'active-moved' } satisfies DesktopPendingTransaction)
++      if (existsSync(this.paths.profile)) await renameWithTransientRetry(this.paths.profile, failed)
++      await renameWithTransientRetry(this.paths.rollback, this.paths.profile)
++      unlinkSync(this.paths.pending)
++      this.preparedActivation = false
++      await this.discard(dirname(failed))
++    })
++  }
++
++  /** Delete replaced profiles and discarded slots once the application is ready. */
++  async cleanupTrash(): Promise<void> {
++    if (!existsSync(this.trashRoot)) return
++    for (const entry of readdirSync(this.trashRoot)) await removeOwnedDirectory(join(this.trashRoot, entry)).catch(() => undefined)
++  }
++
++  /** Move an owned directory out of the way now; delete its contents later. */
++  private async discard(path: string): Promise<void> {
++    if (!existsSync(path)) return
++    const stat = lstatSync(path)
++    // Only an owned directory is moved; anything else keeps the strict removal rules.
++    if (stat.isSymbolicLink() || !stat.isDirectory()) {
++      await removeOwnedDirectory(path)
++      return
++    }
++    mkdirSync(this.trashRoot, { recursive: true, mode: 0o700 })
++    try {
++      await renameWithTransientRetry(path, join(this.trashRoot, randomUUID()))
++    } catch {
++      await removeOwnedDirectory(path)
++    }
++  }
++
++  private async buildStaging(seedDir: string, target: DesktopRelease, state: DesktopProfileState, stagingProfile: string): Promise<void> {
++    const { legacy, currentRelease } = state
++    const productVersion = target.productVersion ?? target.version
++    if (currentRelease) {
++      // Repair only the dependency layout. Keep the user's exact lock and bundles,
++      // including managed plugins they removed, disabled plugins and their config.
++      copyMetadata(this.paths.profile, stagingProfile)
++      await this.prepareFromCache(stagingProfile, ['install', '--frozen-lockfile', '--trust-lockfile'])
++    } else if (existsSync(this.paths.profile)) {
++      const previous = legacy ? undefined : releaseFile(this.paths.profile)
++      const previousManifest = legacy ? undefined : projectManifest(this.paths.profile)
++      const core = previous ? new Set(readDesktopCorePackageSet(this.paths.profile, previous.version).packages.map(pkg => pkg.name)) : undefined
++      const installed = legacy?.plugins ?? Object.keys(previousManifest!.dependencies)
++        .filter(name => !core!.has(name)).map(name => inspectPlugin(this.paths.profile, name))
++      const previousBundles = legacy?.bundles ?? previousManifest!.dsh.profile.bundles
++      const disabled = new Set(installed.filter(plugin => !previousBundles.includes(plugin.name)).map(plugin => plugin.name))
++      const managed = target.managedPlugins ?? []
++      const userPlugins = installed.filter(plugin => !managed.some(entry => entry.name === plugin.name))
++      // An explicitly removed managed plugin stays removed. A newly introduced
++      // managed package is enabled once; ordinary user plugins keep their versions.
++      const removed = managed.filter(plugin => (previous?.managedPlugins?.some(entry => entry.name === plugin.name)
++        || (legacy && existsSync(join(this.paths.profile, 'agentrouter-preinstalled.json'))))
++        && !installed.some(entry => entry.name === plugin.name))
++      const plugins = [...managed.filter(plugin => !removed.includes(plugin)), ...userPlugins]
++      copyMetadata(seedDir, stagingProfile)
++      await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
++      if (userPlugins.length > 0) {
++        await this.prepareFromCache(stagingProfile, [
++          'add',
++          ...userPlugins.map(plugin => `${plugin.name}@${plugin.version}`),
++          '--save-exact',
++          '--lockfile-only',
++          // The preceding install verified this seed's lock. Keep normal
++          // resolver checks for added packages without rechecking every seed entry.
++          '--trust-lockfile',
++        ])
++      }
++      for (const plugin of removed) await this.prepareFromCache(stagingProfile, ['remove', plugin.name, '--lockfile-only', '--trust-lockfile'])
++      if (userPlugins.length > 0 || removed.length > 0) {
++        await this.prepareFromCache(stagingProfile, ['install', '--frozen-lockfile', '--trust-lockfile'])
++      }
++      writeProfilePlugins(stagingProfile, plugins)
++      if (disabled.size > 0) {
++        const manifest = projectManifest(stagingProfile)
++        writeJson(join(stagingProfile, 'package.json'), { ...manifest,
++          dsh: { ...manifest.dsh, profile: { ...manifest.dsh.profile,
++            bundles: manifest.dsh.profile.bundles.filter(name => !disabled.has(name)) } } })
++      }
++      const userPatch = join(this.paths.profile, 'cordis.patch.yml')
++      if (existsSync(userPatch)) copyFileSync(userPatch, join(stagingProfile, 'cordis.patch.yml'))
++      if (legacy) {
++        // Retain installed-but-disabled bundles and standalone profile config.
++        const config = join(this.paths.profile, 'cordis.yml')
++        if (existsSync(config)) copyFileSync(config, join(stagingProfile, 'cordis.yml'))
++        // Keep a durable metadata backup beyond the next transaction's rollback
++        // slot. Do not follow module fallback links into another installation.
++        const backup = join(this.paths.root, 'legacy-profile-backups', randomUUID())
++        cpSync(this.paths.profile, backup, { recursive: true, filter: path =>
++          !relative(this.paths.profile, path).split(sep).includes('node_modules')
++          && !lstatSync(path).isSymbolicLink() })
++        writeJson(join(stagingProfile, 'agentrouter-legacy-migration.json'), {
++          schemaVersion: 1, source: 'dsh-profile-desktop', productVersion, backup,
++        })
++      }
++    } else {
++      copyMetadata(seedDir, stagingProfile)
++      await this.runPnpm(stagingProfile, ['install', '--offline', '--frozen-lockfile', '--trust-lockfile'])
++    }
++  }
++
    /** Apply one exact dependency mutation through a staging project. */
    async mutate(mutation: DesktopProjectMutation, hooks: DesktopProjectHooks): Promise<void> {
      await this.withLock(async () => {
@@ -1366,7 +1772,7 @@ index b9b94f7..1231db8 100644
        }
      })
    }
-@@ -460,14 +809,52 @@ export class DesktopProjectManager {
+@@ -460,14 +1058,79 @@ export class DesktopProjectManager {
      mkdirSync(path, { recursive: true, mode: 0o700 })
      return path
    }
@@ -1381,11 +1787,38 @@ index b9b94f7..1231db8 100644
 +    }
 +    if (!isRecord(modules) || typeof modules.storeDir !== 'string' || !isAbsolute(modules.storeDir)
 +      || modules.nodeLinker !== 'hoisted') return false
++    return relative(resolve(modules.storeDir), resolve(await this.bundledStorePath())) === ''
++  }
++
++  /**
++   * The store the bundled pnpm uses with Desktop's private configuration.
++   * The answer is fixed by the exact pnpm entry, its version and the configured
++   * store directory, so a normal launch reuses it instead of starting pnpm.
++   */
++  private async bundledStorePath(): Promise<string> {
++    const cacheFile = join(this.paths.root, 'pnpm-store-path.json')
++    let version: unknown
++    try {
++      const manifest = readJson(join(dirname(dirname(this.runtime.pnpm)), 'package.json'))
++      if (isRecord(manifest) && manifest.name === 'pnpm') version = manifest.version
++    } catch { /* A development entry has no package manifest beside it. */ }
++    const key = { pnpm: this.runtime.pnpm, version, store: this.paths.pnpm.store }
++    if (typeof version === 'string') {
++      try {
++        const cached = readJson(cacheFile)
++        if (isRecord(cached) && cached.pnpm === key.pnpm && cached.version === key.version && cached.store === key.store
++          && typeof cached.path === 'string' && isAbsolute(cached.path)) return cached.path
++      } catch { /* Absent or unreadable: ask pnpm. */ }
++    }
 +    // This read-only pnpm command uses exactly the same bundled runtime and private
 +    // configuration as installation. Do not guess v10/v11 directory conventions.
 +    const expected = (await this.runPnpm(this.paths.root, ['store', 'path', '--silent'])).trim()
 +    if (!isAbsolute(expected)) throw new Error('desktop project: bundled pnpm did not report an absolute store path')
-+    return relative(resolve(modules.storeDir), resolve(expected)) === ''
++    if (typeof version === 'string') {
++      writeJson(cacheFile + '.tmp', { ...key, path: expected })
++      renameSync(cacheFile + '.tmp', cacheFile)
++    }
++    return expected
 +  }
 +
 +  private async prepareFromCache(projectDir: string, args: readonly string[]): Promise<void> {
@@ -1420,7 +1853,7 @@ index b9b94f7..1231db8 100644
          const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
          writeProfilePlugins(
            projectDir,
-@@ -480,9 +867,9 @@ export class DesktopProjectManager {
+@@ -480,9 +1143,9 @@ export class DesktopProjectManager {
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
@@ -1431,7 +1864,7 @@ index b9b94f7..1231db8 100644
          return
        }
        case 'plugin-update':
-@@ -490,9 +877,9 @@ export class DesktopProjectManager {
+@@ -490,9 +1153,9 @@ export class DesktopProjectManager {
          assertVersion(mutation.version)
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
@@ -1442,7 +1875,7 @@ index b9b94f7..1231db8 100644
            const installed = inspectPlugin(projectDir, mutation.name)
            writeProfilePlugins(
              projectDir,
-@@ -504,16 +891,24 @@ export class DesktopProjectManager {
+@@ -504,20 +1167,29 @@ export class DesktopProjectManager {
          mutation satisfies never
      }
    }
@@ -1462,7 +1895,7 @@ index b9b94f7..1231db8 100644
      try {
 -      extractPnpmStoreArchives(seedDir, extractedStore)
 -      mergePnpmStore(extractedStore, this.paths.pnpm.store)
-+      await extractPnpmStoreArchives(seedDir, extractedStore)
++      await extractPnpmStoreArchives(seedDir, extractedStore, this.paths.pnpm.store)
 +      await mergePnpmStore(extractedStore, this.paths.pnpm.store)
      } finally {
 -      removeOwnedDirectory(transactionRoot)
@@ -1470,8 +1903,14 @@ index b9b94f7..1231db8 100644
      }
    }
  
-   private async activate(stagingProfile: string, hooks: DesktopProjectHooks): Promise<void> {
-@@ -525,31 +920,39 @@ export class DesktopProjectManager {
+-  private async activate(stagingProfile: string, hooks: DesktopProjectHooks): Promise<void> {
++  private async activate(stagingProfile: string, hooks: DesktopProjectHooks,
++    options: { readonly probed?: boolean } = {}): Promise<void> {
+     const pending: DesktopPendingTransaction = {
+       schemaVersion: 1,
+       id: basename(dirname(stagingProfile)),
+       stagingProfile,
+@@ -525,31 +1197,42 @@ export class DesktopProjectManager {
      }
      writeJson(this.paths.pending, pending)
      await hooks.beforeActivate()
@@ -1480,8 +1919,11 @@ index b9b94f7..1231db8 100644
 +    const renameOptions = this.renameOptions()
      try {
 -      removeOwnedDirectory(this.paths.rollback)
-+      await this.releaseStagingProcesses(stagingProfile)
-+      await removeOwnedDirectory(this.paths.rollback)
++      // Only a probed staging profile can hold host descendants; a prepared slot
++      // never ran one. A refused rename still cleans and names holders below.
++      if (options.probed !== false) await this.releaseStagingProcesses(stagingProfile)
++      // Deleting a complete previous graph takes seconds; it happens after startup.
++      await this.discard(this.paths.rollback)
        mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
        writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
        if (existsSync(this.paths.profile)) {
@@ -1517,7 +1959,7 @@ index b9b94f7..1231db8 100644
      if (command === undefined) throw new Error('desktop project: pnpm command is required')
      for (const path of [this.paths.root, this.paths.pnpm.store, this.paths.pnpm.cache,
        this.paths.pnpm.state, this.paths.pnpm.config, this.paths.pnpm.home]) {
-@@ -559,9 +962,9 @@ export class DesktopProjectManager {
+@@ -559,9 +1242,9 @@ export class DesktopProjectManager {
      if (!existsSync(npmrc)) writeFileSync(npmrc, '', { mode: 0o600 })
      const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
        !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
@@ -1528,7 +1970,7 @@ index b9b94f7..1231db8 100644
          this.runtime.pnpm,
          `--config.registry=${DESKTOP_REGISTRY}`,
          `--config.store-dir=${this.paths.pnpm.store}`,
-@@ -570,10 +973,14 @@ export class DesktopProjectManager {
+@@ -570,10 +1253,14 @@ export class DesktopProjectManager {
          command,
          ...commandArgs,
        ], {
@@ -1543,7 +1985,7 @@ index b9b94f7..1231db8 100644
            NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
            NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
            NPM_CONFIG_USERCONFIG: npmrc,
-@@ -598,14 +1005,16 @@ export class DesktopProjectManager {
+@@ -598,14 +1285,16 @@ export class DesktopProjectManager {
          reject(errorOf(error, 'desktop project: failed to assign the package transaction lock to pnpm'))
          return
        }
@@ -1560,7 +2002,7 @@ index b9b94f7..1231db8 100644
        child.stderr.on('data', appendDiagnostics)
        const complete = (settleChild: () => void): void => {
          if (completed) return
-@@ -621,14 +1030,12 @@ export class DesktopProjectManager {
+@@ -621,14 +1310,12 @@ export class DesktopProjectManager {
        child.once('error', (error) => { complete(() => { reject(error) }) })
        child.once('close', (code, signal) => {
          complete(() => {
@@ -1577,7 +2019,7 @@ index b9b94f7..1231db8 100644
        })
      })
    }
-@@ -689,15 +1096,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
+@@ -689,15 +1376,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
    const manifest: DesktopProjectManifest = {
      name: PROJECT_NAME,
      private: true,
@@ -1645,7 +2087,7 @@ index f78d922..b9a1e7e 100644
      pnpmVersion: value.pnpmVersion,
    }
 diff --git a/apps/desktop/src/seed-store.ts b/apps/desktop/src/seed-store.ts
-index e4b4759..bce8158 100644
+index e4b4759..9d3e3e9 100644
 --- a/apps/desktop/src/seed-store.ts
 +++ b/apps/desktop/src/seed-store.ts
 @@ -3,16 +3,17 @@
@@ -1662,7 +2104,7 @@ index e4b4759..bce8158 100644
 +  statSync,
    writeFileSync,
  } from 'node:fs'
-+import { cp } from 'node:fs/promises'
++import { copyFile, mkdir, readdir, rename } from 'node:fs/promises'
  import { join, relative, sep } from 'node:path'
  import { DatabaseSync } from 'node:sqlite'
  import { create, extract, list } from 'tar'
@@ -1678,7 +2120,28 @@ index e4b4759..bce8158 100644
  
  interface SeedStoreArchiveRecord {
    readonly file: string
-@@ -85,9 +86,9 @@ function readArchiveManifest(seedRoot: string): SeedStoreArchiveManifest {
+@@ -58,8 +59,20 @@ function storeFiles(storeRoot: string): readonly string[] {
+   visit(storeRoot)
+   return files.sort((left, right) => left.localeCompare(right))
+ }
+ 
++/** Run independent filesystem tasks with bounded concurrency. */
++async function runConcurrently(tasks: readonly (() => Promise<void>)[], limit: number): Promise<void> {
++  let next = 0
++  const worker = async (): Promise<void> => {
++    while (next < tasks.length) {
++      const task = tasks[next++] as () => Promise<void>
++      await task()
++    }
++  }
++  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker))
++}
++
+ function shardFor(path: string, shardCount: number): number {
+   return createHash('sha256').update(path).digest().readUInt32BE(0) % shardCount
+ }
+ 
+@@ -85,9 +98,9 @@ function readArchiveManifest(seedRoot: string): SeedStoreArchiveManifest {
        || names.has(record.file) || !Number.isSafeInteger(record.entries) || (record.entries as number) < 1) {
        throw new Error(`desktop seed: invalid pnpm store archive record in ${path}`)
      }
@@ -1689,9 +2152,16 @@ index e4b4759..bce8158 100644
      }
      names.add(record.file)
      return { file: record.file, entries: record.entries as number }
-@@ -147,16 +148,16 @@ function mergeStoreIndex(source: string, destination: string): void {
+@@ -144,23 +157,54 @@ function mergeStoreIndex(source: string, destination: string): void {
+ }
+ 
+ /**
   * Merge a completely extracted seed store into Desktop's persistent pnpm store.
-  * @param source - Verified temporary store extraction.
+- * @param source - Verified temporary store extraction.
++ * Package files are content-addressed, so an existing file already holds the
++ * same bytes: keep it (it may be hard-linked into, or loaded by, a running
++ * profile) and move only missing files. Index records are merged transactionally.
++ * @param source - Verified temporary store extraction; consumed by the merge.
   * @param destination - Desktop-owned persistent pnpm store.
   */
 -export function mergePnpmStore(source: string, destination: string): void {
@@ -1703,12 +2173,48 @@ index e4b4759..bce8158 100644
      .map(entry => `${entry.name}/index.db`)
    const indexes = new Set(indexPaths)
 -  cpSync(source, destination, {
-+  await cp(source, destination, {
-     recursive: true,
-     force: true,
-     filter: path => !indexes.has(relative(source, path).split(sep).join('/')),
-   })
-@@ -184,21 +185,25 @@ export function archivePnpmStore(
+-    recursive: true,
+-    force: true,
+-    filter: path => !indexes.has(relative(source, path).split(sep).join('/')),
+-  })
++  const move = async (child: string, directory: boolean): Promise<void> => {
++    const from = join(source, ...child.split('/'))
++    const to = join(destination, ...child.split('/'))
++    try {
++      await rename(from, to)
++    } catch (error) {
++      // Another volume or a transient Windows share violation: copy instead.
++      if (!['EXDEV', 'EPERM', 'EBUSY', 'EACCES'].includes(String((error as NodeJS.ErrnoException).code))) throw error
++      if (directory) await visit(child)
++      else await copyFile(from, to)
++    }
++  }
++  const visit = async (relativeDir: string): Promise<void> => {
++    const from = join(source, relativeDir)
++    const to = join(destination, relativeDir)
++    await mkdir(to, { recursive: true, mode: 0o700 })
++    const tasks: (() => Promise<void>)[] = []
++    for (const entry of await readdir(from, { withFileTypes: true })) {
++      const child = relativeDir === '' ? entry.name : `${relativeDir}/${entry.name}`
++      const target = join(destination, ...child.split('/'))
++      if (entry.isDirectory()) {
++        // Below a store version, a directory absent from the persistent store
++        // moves as a whole: a first installation needs hundreds of renames, not
++        // tens of thousands. Version roots are descended to merge their index.
++        tasks.push(relativeDir !== '' && !existsSync(target) ? () => move(child, true) : () => visit(child))
++        continue
++      }
++      if (indexes.has(child) || existsSync(target)) continue
++      tasks.push(() => move(child, false))
++    }
++    await runConcurrently(tasks, 16)
++  }
++  await visit('')
+   for (const path of indexPaths) {
+     mergeStoreIndex(join(source, ...path.split('/')), join(destination, ...path.split('/')))
+   }
+ }
+@@ -184,21 +228,25 @@ export function archivePnpmStore(
    rmSync(archiveRoot, { recursive: true, force: true })
    rmSync(manifestPath, { force: true })
    mkdirSync(archiveRoot, { recursive: true })
@@ -1746,18 +2252,20 @@ index e4b4759..bce8158 100644
      archives.push({ file, entries: paths.length })
    }
    if (archives.length === 0) throw new Error('desktop seed: pnpm store is empty')
-@@ -210,9 +215,9 @@ export function archivePnpmStore(
+@@ -209,10 +257,11 @@ export function archivePnpmStore(
+ /**
   * Validate and extract a packaged pnpm store archive set into an empty directory.
   * @param seedRoot - verified packaged seed directory.
   * @param destination - empty Desktop-owned temporary extraction directory.
++ * @param existingStore - persistent store whose content-addressed files need not be extracted again.
   */
 -export function extractPnpmStoreArchives(seedRoot: string, destination: string): void {
-+export async function extractPnpmStoreArchives(seedRoot: string, destination: string): Promise<void> {
++export async function extractPnpmStoreArchives(seedRoot: string, destination: string, existingStore?: string): Promise<void> {
    const manifest = readArchiveManifest(seedRoot)
    const archiveRoot = join(seedRoot, SEED_STORE_ARCHIVE_DIR)
    const actualFiles = readdirSync(archiveRoot, { withFileTypes: true }).map((entry) => {
      if (!entry.isFile() || entry.isSymbolicLink()) {
-@@ -232,40 +237,49 @@ export function extractPnpmStoreArchives(seedRoot: string, destination: string):
+@@ -232,40 +281,56 @@ export function extractPnpmStoreArchives(seedRoot: string, destination: string):
    for (const archive of manifest.archives) {
      const archivePath = join(archiveRoot, archive.file)
      const archiveShard = Number.parseInt(archive.file.slice('store-'.length, -'.tar'.length), 16)
@@ -1808,8 +2316,11 @@ index e4b4759..bce8158 100644
        throw new Error(`desktop seed: pnpm store archive ${archive.file} has an unexpected entry count`)
      }
    }
-   for (const archive of manifest.archives) {
+-  for (const archive of manifest.archives) {
 -    extract({
++  // Every entry was validated above. Shards hold disjoint paths; per-file creation
++  // latency dominates on Windows, so bounded parallel extraction is much faster.
++  await runConcurrently(manifest.archives.map(archive => async () => {
 +    await extract({
        chmod: true,
        cwd: destination,
@@ -1819,8 +2330,14 @@ index e4b4759..bce8158 100644
        processUmask: 0,
        strict: true,
 -      sync: true,
++      // An update usually shares most package files with the installed store;
++      // write only the missing ones.
++      ...(existingStore === undefined ? {} : {
++        filter: (path: string) => path.endsWith('/index.db') || !existsSync(join(existingStore, ...path.split('/'))),
++      }),
      })
-   }
+-  }
++  }), 6)
  }
 diff --git a/apps/desktop/src/staging-processes.ts b/apps/desktop/src/staging-processes.ts
 new file mode 100644
@@ -1926,21 +2443,23 @@ index 0000000..f765170
 +  return UUID_PATTERN.test(basename(resolve(directory)))
 +}
 diff --git a/apps/desktop/src/update-coordinator.ts b/apps/desktop/src/update-coordinator.ts
-index c31dcc3..706bf03 100644
+index c31dcc3..83368ee 100644
 --- a/apps/desktop/src/update-coordinator.ts
 +++ b/apps/desktop/src/update-coordinator.ts
-@@ -1,25 +1,35 @@
+@@ -1,25 +1,51 @@
  /** One Electron release stream for the version-bound shell and dsh seed. */
 -
 -import { existsSync } from 'node:fs'
 +import { existsSync, readFileSync } from 'node:fs'
  import { join } from 'node:path'
+-import { app } from 'electron'
 +import { load as loadYaml } from 'js-yaml'
- import { app } from 'electron'
++import { app, net } from 'electron'
  import electronUpdater, { type AppUpdater } from 'electron-updater'
  import type { DesktopUpdateState } from './ipc.ts'
 +import { configurePinnedUpdater } from './agentrouter-update-signature.mjs'
 +import { configureUpdateRecovery, updateFailureMessage } from './agentrouter-update-recovery.mjs'
++import { installResilientTransport, mirroredFetch } from './agentrouter-update-transport.mjs'
  const { autoUpdater } = electronUpdater
  
 -/** Checks, downloads, and installs one complete Desktop release. */
@@ -1948,9 +2467,18 @@ index c31dcc3..706bf03 100644
 +  phase: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'restarting' | 'error'
 +  version?: string
 +  checkedAt?: string
-+  progress?: { transferred: number; total: number; percent: number }
++  progress?: { transferred: number; total: number; percent: number; bytesPerSecond?: number }
 +  error?: string
 +  releaseInfo?: unknown
++  preparing?: boolean
++}
++
++/** Result of preparing a downloaded release's runtime; display and diagnostics only. */
++interface RuntimePreparation {
++  version: string
++  outcome: string
++  durationMs: number
++  error?: string
 +}
 +
 +/** The native menu and public update page share this single updater. */
@@ -1961,20 +2489,25 @@ index c31dcc3..706bf03 100644
    private checkOperation: Promise<DesktopUpdateState> | undefined
 +  private downloadOperation: Promise<DesktopUpdateState> | undefined
    private installOperation: Promise<DesktopUpdateState> | undefined
+-
 +  private readonly signatureCheck: ReturnType<typeof configurePinnedUpdater> | undefined
 +  private readonly recovery: ReturnType<typeof configureUpdateRecovery>
- 
--  /**
++  private preparation: RuntimePreparation | undefined
+   /**
 -   * @param publish - state sink for every desktop window.
 -   * @param beforeRestart - stop application-owned processes before replacement.
 -   * @param updater - Electron artifact updater; replaceable for tests.
 -   * @param enabled - whether this packaged process carries updater configuration.
--   */
++   * Optional: build the verified download's runtime while this release keeps running,
++   * so the restart only switches profiles. A failure never blocks the restart.
+    */
++  prepareRuntime?: (version: string, files: string[], releaseInfo: unknown) => Promise<{ outcome?: string } | undefined>
++
    constructor(
      private readonly publish: (state: DesktopUpdateState) => DesktopUpdateState,
      private readonly beforeRestart: () => Promise<void> = async () => {},
      private readonly updater: AppUpdater = autoUpdater,
-@@ -28,68 +38,160 @@ export class DesktopUpdateCoordinator {
+@@ -28,68 +54,184 @@ export class DesktopUpdateCoordinator {
      ),
    ) {
      this.updater.autoDownload = false
@@ -1992,16 +2525,23 @@ index c31dcc3..706bf03 100644
 +        }
 +      }
 +    }
++    // Mirror first with per-file GitHub fallback, resumable installer downloads and
++    // retries. Electron's fetch uses the system proxy like the updater itself.
++    const fetcher = typeof net?.fetch === 'function' ? (url: string, init?: RequestInit) => net.fetch(url, init) : fetch
++    if (app.isPackaged && (this.updater as unknown as { httpExecutor?: unknown }).httpExecutor) {
++      installResilientTransport(this.updater, { fetcher })
++    }
 +    const signaturePath = app.isPackaged ? join(app.getAppPath(), 'update-signing.json') : undefined
 +    if (signaturePath !== undefined && existsSync(signaturePath)) {
 +      const signing = JSON.parse(readFileSync(signaturePath, 'utf8'))
-+      this.signatureCheck = configurePinnedUpdater(this.updater, signing, () => this.availableVersion)
++      this.signatureCheck = configurePinnedUpdater(this.updater, signing, () => this.availableVersion, mirroredFetch(fetcher))
 +    }
 +    this.updater.on?.('download-progress', (progress) => {
 +      if (this.detail.phase !== 'downloading') return
-+      const { transferred, total, percent } = progress
++      const { transferred, total, percent, bytesPerSecond } = progress
 +      if ([transferred, total, percent].every(Number.isFinite) && transferred >= 0 && total > 0) {
-+        this.detail.progress = { transferred, total, percent: Math.max(0, Math.min(100, percent)) }
++        this.detail.progress = { transferred, total, percent: Math.max(0, Math.min(100, percent)),
++          ...(Number.isFinite(bytesPerSecond) ? { bytesPerSecond } : {}) }
 +      }
 +    })
 +    this.updater.on?.('error', () => {})
@@ -2011,7 +2551,7 @@ index c31dcc3..706bf03 100644
 +    return { ...this.detail, version: this.availableVersion,
 +      canDownload: !!this.availableVersion && !this.downloaded && !this.checkOperation && !this.downloadOperation && !this.installOperation,
 +      canInstall: !!this.downloaded && this.detail.phase === 'ready' && !this.installOperation,
-+      enabled: this.enabled() }
++      preparation: this.preparation, enabled: this.enabled() }
    }
  
 -  /** Check the configured Desktop release stream and retain an available version. */
@@ -2102,6 +2642,7 @@ index c31dcc3..706bf03 100644
 +      const files = await this.updater.downloadUpdate()
 +      await this.signatureCheck?.afterDownload(files)
 +      this.downloaded = files
++      await this.prepareDownloaded(version, files)
 +      this.detail = { ...this.detail, phase: 'ready', progress: undefined }
 +      return this.publish({ phase: 'ready', version })
      } catch (error) {
@@ -2138,18 +2679,33 @@ index c31dcc3..706bf03 100644
        await this.beforeRestart()
 -      this.updater.quitAndInstall(false, true)
 -      return ready
--    } catch (error) {
--      return this.publish({
--        phase: 'error',
--        version,
--        message: error instanceof Error ? error.message : String(error),
--      })
 +      this.detail = { ...this.detail, phase: 'restarting', error: undefined }
 +      this.updater.quitAndInstall(true, true)
 +      return { phase: 'ready', version }
 +    } catch {
 +      this.detail = { ...this.detail, phase: 'ready', error: '任务仍在运行，或暂时无法重启。请稍后再试。' }
 +      return this.publish({ phase: 'error', version, message: this.detail.error })
++    }
++  }
++
++  private async prepareDownloaded(version: string, files: string[]): Promise<void> {
++    if (this.prepareRuntime === undefined) return
++    if (this.preparation?.version === version && this.preparation.outcome !== 'failed') return
++    const started = Date.now()
++    this.detail.preparing = true
++    try {
++      const result = await this.prepareRuntime(version, files, this.detail.releaseInfo)
++      this.preparation = { version, outcome: result?.outcome ?? 'prepared', durationMs: Date.now() - started }
+     } catch (error) {
+-      return this.publish({
+-        phase: 'error',
+-        version,
+-        message: error instanceof Error ? error.message : String(error),
+-      })
++      this.preparation = { version, outcome: 'failed', durationMs: Date.now() - started,
++        error: (error instanceof Error ? error.message : String(error)).slice(0, 2000) }
++    } finally {
++      this.detail.preparing = false
 +    }
 +  }
 +
@@ -2198,7 +2754,7 @@ index d3a08d7..fdc9cc1 100644
  const bodies = new Map()
  process.send({ type: 'ready', protocolVersion: 3, dshVersion: process.env.NODE_OPTIONS ?? 'clean' })
 diff --git a/apps/desktop/tests/project-manager.spec.ts b/apps/desktop/tests/project-manager.spec.ts
-index 27ac24f..0188e95 100644
+index 27ac24f..204324d 100644
 --- a/apps/desktop/tests/project-manager.spec.ts
 +++ b/apps/desktop/tests/project-manager.spec.ts
 @@ -7,16 +7,21 @@ import { afterEach, describe, expect, it } from 'vitest'
@@ -2619,7 +3175,7 @@ index 27ac24f..0188e95 100644
    })
  
    it('reconciles dsh to the packaged release without removing desktop plugins', async () => {
-@@ -407,4 +737,174 @@ describe('desktop project transactions', () => {
+@@ -407,4 +737,292 @@ describe('desktop project transactions', () => {
      expect(readFileSync(join(paths.pnpm.store, 'release-2'), 'utf8')).toBe('two')
      await expect(manager.applyRelease(nextSeed, '1.1.0', hooks())).resolves.toBe(false)
    })
@@ -2794,8 +3350,126 @@ index 27ac24f..0188e95 100644
 +    expect(isIdempotentPnpmCommand(['install', '--lockfile-only'])).toBe(false)
 +  })
 +})
++
++describe('runtime prepared off the startup path', () => {
++  const owned = '@agentrouter-top/dsh-codex'
++  const setup = () => {
++    const root = temporaryRoot()
++    const paths = resolveDesktopPaths(join(root, 'home'))
++    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) })
++    const seed = (productVersion: string, pluginVersion: string) => {
++      const dir = join(root, productVersion)
++      createTestSeedMetadata(dir, { ...release('0.1.5-rc.3'), productVersion,
++        runtimeFingerprint: createHash('sha256').update(pluginVersion).digest('hex'),
++        managedPlugins: [{ name: owned, version: pluginVersion }] })
++      archiveStore(dir); writeIntegrity(dir)
++      return dir
++    }
++    return { root, paths, manager, seed }
++  }
++
++  it('prepares the next release beside the running profile and startup only activates it', async () => {
++    const { paths, manager, seed } = setup()
++    await manager.applyRelease(seed('3.0.19', '0.16.0'), '3.0.19', hooks())
++    await manager.mutate({ type: 'plugin-add', spec: '@fixture/ordinary@2.0.0' }, hooks())
++    const active = readFileSync(join(paths.profile, 'package.json'))
++    const next = seed('3.0.20', '0.16.1')
++    await expect(manager.prepareRelease(next, '3.0.20')).resolves.toBe('prepared')
++    // Preparation never touches the active profile the running release uses.
++    expect(readFileSync(join(paths.profile, 'package.json'))).toEqual(active)
++    expect(manager.releaseVersion()).toBe('3.0.19')
++    expect(manager.preparedFor('3.0.20')).toBe(true)
++    // Settings changed after preparation are carried into the activated profile.
++    writeFileSync(join(paths.profile, 'cordis.patch.yml'), '# changed after preparation\n[]\n')
++    const stages: string[] = []
++    await expect(manager.applyRelease(next, '3.0.20', hooks({
++      progress: async stage => { stages.push(stage) },
++      healthCheck: async () => { throw new Error('a prepared runtime is proved by its first start') },
++    }))).resolves.toBe(true)
++    expect(stages).toEqual(['checking', 'activating'])
++    expect(manager.activatedPrepared).toBe(true)
++    expect(manager.releaseVersion()).toBe('3.0.20')
++    expect(manager.listPlugins()).toEqual([
++      { name: owned, version: '0.16.1', updateOwner: 'product' }, { name: '@fixture/ordinary', version: '2.0.0' },
++    ])
++    expect(readFileSync(join(paths.profile, 'cordis.patch.yml'), 'utf8')).toBe('# changed after preparation\n[]\n')
++    expect(existsSync(join(paths.root, 'prepared'))).toBe(false)
++    expect(JSON.parse(readFileSync(join(paths.rollback, 'desktop-release.json'), 'utf8')).productVersion).toBe('3.0.19')
++    // A failed first start returns to the previous profile; startup then rebuilds.
++    await manager.revertActivation()
++    expect(manager.releaseVersion()).toBe('3.0.19')
++    expect(manager.activatedPrepared).toBe(false)
++    const rebuilt: string[] = []
++    await expect(manager.applyRelease(next, '3.0.20', hooks({ progress: async stage => { rebuilt.push(stage) } }),
++      { usePrepared: false })).resolves.toBe(true)
++    expect(rebuilt).toEqual(['checking', 'preparing', 'installing', 'validating'])
++    expect(manager.listPlugins()[0]).toEqual({ name: owned, version: '0.16.1', updateOwner: 'product' })
++    await manager.cleanupTrash()
++    expect(existsSync(join(paths.root, 'trash')) ? readdirSync(join(paths.root, 'trash')) : []).toEqual([])
++  })
++
++  it('discards a prepared runtime when plugins changed after preparation', async () => {
++    const { paths, manager, seed } = setup()
++    await manager.applyRelease(seed('3.0.19', '0.16.0'), '3.0.19', hooks())
++    const next = seed('3.0.20', '0.16.1')
++    await expect(manager.prepareRelease(next, '3.0.20')).resolves.toBe('prepared')
++    await manager.mutate({ type: 'plugin-add', spec: '@fixture/late@1.0.0' }, hooks())
++    expect(manager.preparedFor('3.0.20')).toBe(false)
++    const stages: string[] = []
++    await manager.applyRelease(next, '3.0.20', hooks({ progress: async stage => { stages.push(stage) } }))
++    expect(stages).toContain('installing')
++    expect(manager.listPlugins().map(plugin => plugin.name)).toEqual([owned, '@fixture/late'])
++    expect(existsSync(join(paths.root, 'prepared'))).toBe(false)
++  })
++
++  it('never activates a slot prepared from another seed or release', async () => {
++    const { paths, manager, seed } = setup()
++    await manager.applyRelease(seed('3.0.19', '0.16.0'), '3.0.19', hooks())
++    await expect(manager.prepareRelease(seed('3.0.20', '0.16.1'), '3.0.20')).resolves.toBe('prepared')
++    const other = seed('3.0.21', '0.16.2')
++    const stages: string[] = []
++    await manager.applyRelease(other, '3.0.21', hooks({ progress: async stage => { stages.push(stage) } }))
++    expect(stages).not.toContain('activating')
++    expect(manager.listPlugins()[0]?.version).toBe('0.16.2')
++    expect(existsSync(join(paths.root, 'prepared'))).toBe(false)
++  })
++
++  it('reports when no preparation is needed or possible', async () => {
++    const { paths, manager, seed } = setup()
++    const first = seed('3.0.19', '0.16.0')
++    await expect(manager.prepareRelease(first, '3.0.19')).resolves.toBe('unsupported')
++    await manager.applyRelease(first, '3.0.19', hooks())
++    await expect(manager.prepareRelease(first, '3.0.19')).resolves.toBe('current')
++    expect(existsSync(join(paths.root, 'prepared'))).toBe(false)
++  })
++
++  it('reuses the bundled pnpm store answer instead of starting pnpm on every launch', async () => {
++    const root = temporaryRoot()
++    const paths = resolveDesktopPaths(join(root, 'home'))
++    const entry = join(root, 'runtime', 'pnpm', 'bin', 'pnpm.mjs')
++    mkdirSync(dirname(entry), { recursive: true })
++    writeFileSync(join(root, 'runtime', 'pnpm', 'package.json'), JSON.stringify({ name: 'pnpm', version: '11.7.0' }))
++    writeFileSync(entry, `await import(${JSON.stringify(pathToFileURL(writeFakePnpm(root)).href)})\n`)
++    const log = join(root, 'pnpm-log.json')
++    process.env.TEST_PNPM_LOG = log
++    try {
++      const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: entry })
++      const seed = join(root, 'seed')
++      createTestSeedMetadata(seed, release())
++      archiveStore(seed); writeIntegrity(seed)
++      await manager.applyRelease(seed, '1.0.0', hooks())
++      await expect(manager.applyRelease(seed, '1.0.0', hooks())).resolves.toBe(false)
++      const storeQueries = () => (JSON.parse(readFileSync(log, 'utf8')).history as string[][])
++        .filter(args => args.includes('store')).length
++      const first = storeQueries()
++      await expect(manager.applyRelease(seed, '1.0.0', hooks())).resolves.toBe(false)
++      expect(storeQueries()).toBe(first)
++      expect(first).toBeLessThanOrEqual(1)
++    } finally { delete process.env.TEST_PNPM_LOG }
++  })
++})
 diff --git a/apps/desktop/tests/seed-store.spec.ts b/apps/desktop/tests/seed-store.spec.ts
-index e0e7d14..8ad9888 100644
+index e0e7d14..b1f8838 100644
 --- a/apps/desktop/tests/seed-store.spec.ts
 +++ b/apps/desktop/tests/seed-store.spec.ts
 @@ -4,8 +4,9 @@ import {
@@ -2814,13 +3488,17 @@ index e0e7d14..8ad9888 100644
  
  describe('desktop seed store merge', () => {
 -  it('preserves installed package records while the verified seed replaces matching records and files', { timeout: 30_000 }, () => {
-+  it('preserves installed package records while the verified seed replaces matching records and files', { timeout: 30_000 }, async () => {
++  it('preserves installed package records while the verified seed replaces matching records and adds missing files', { timeout: 30_000 }, async () => {
      const root = temporaryRoot()
      const source = join(root, 'source')
      const destination = join(root, 'destination')
      for (const store of [source, destination]) {
-@@ -84,9 +85,9 @@ describe('desktop seed store merge', () => {
+@@ -81,12 +82,13 @@ describe('desktop seed store merge', () => {
+       }
+       database.close()
+     }
      writeFileSync(join(source, 'v11', 'files', 'shared'), 'new')
++    writeFileSync(join(source, 'v11', 'files', 'seed'), 'seed')
      writeFileSync(join(destination, 'v11', 'files', 'shared'), 'old')
      writeFileSync(join(destination, 'v11', 'files', 'plugin'), 'plugin')
  
@@ -2830,7 +3508,33 @@ index e0e7d14..8ad9888 100644
      const database = new DatabaseSync(join(destination, 'v11', 'index.db'), { readOnly: true })
      const records = database.prepare('SELECT key, data FROM package_index ORDER BY key').all() as {
        key: string
-@@ -103,9 +104,9 @@ describe('desktop seed store merge', () => {
+@@ -97,15 +99,34 @@ describe('desktop seed store merge', () => {
+       ['plugin-only', 'plugin'],
+       ['seed-only', 'seed'],
+       ['shared', 'new'],
+     ])
+-    expect(readFileSync(join(destination, 'v11', 'files', 'shared'), 'utf8')).toBe('new')
++    // Store files are content-addressed: an existing path already holds these bytes
++    // and may be hard-linked into, or loaded by, a running profile. Never rewrite it.
++    expect(readFileSync(join(destination, 'v11', 'files', 'shared'), 'utf8')).toBe('old')
+     expect(readFileSync(join(destination, 'v11', 'files', 'plugin'), 'utf8')).toBe('plugin')
++    expect(readFileSync(join(destination, 'v11', 'files', 'seed'), 'utf8')).toBe('seed')
++  })
++
++  it('extracts only package files missing from the persistent store', async () => {
++    const root = temporaryRoot(), seed = join(root, 'seed'), store = join(seed, 'store')
++    mkdirSync(join(store, 'v11', 'files'), { recursive: true })
++    for (const name of ['present', 'missing']) writeFileSync(join(store, 'v11', 'files', name), name)
++    archivePnpmStore(seed, store)
++    const persistent = join(root, 'persistent')
++    mkdirSync(join(persistent, 'v11', 'files'), { recursive: true })
++    writeFileSync(join(persistent, 'v11', 'files', 'present'), 'present')
++    const extracted = join(root, 'extracted')
++    await extractPnpmStoreArchives(seed, extracted, persistent)
++    expect(existsSync(join(extracted, 'v11', 'files', 'present'))).toBe(false)
++    expect(readFileSync(join(extracted, 'v11', 'files', 'missing'), 'utf8')).toBe('missing')
++    await mergePnpmStore(extracted, persistent)
++    expect(readFileSync(join(persistent, 'v11', 'files', 'missing'), 'utf8')).toBe('missing')
    })
  })
  
@@ -2841,7 +3545,7 @@ index e0e7d14..8ad9888 100644
      const seed = join(root, 'seed')
      const store = join(seed, 'store')
      const executable = join(store, 'v10', 'files', 'native-addon')
-@@ -115,9 +116,9 @@ describe('desktop seed store archives', () => {
+@@ -115,9 +136,9 @@ describe('desktop seed store archives', () => {
      writeFileSync(join(store, 'v10', 'files', 'package-data'), 'package')
  
      archivePnpmStore(seed, store)
@@ -2852,7 +3556,7 @@ index e0e7d14..8ad9888 100644
      expect(existsSync(store)).toBe(false)
      expect(readFileSync(join(destination, 'v10', 'files', 'package-data'), 'utf8')).toBe('package')
      if (process.platform !== 'win32') {
-@@ -145,9 +146,9 @@ describe('desktop seed store archives', () => {
+@@ -145,9 +166,9 @@ describe('desktop seed store archives', () => {
      expect(second.map(entry => entry.path)).toEqual(first.map(entry => entry.path))
      expect(second.map(entry => entry.body)).toEqual(first.map(entry => entry.body))
    })
@@ -2863,7 +3567,7 @@ index e0e7d14..8ad9888 100644
      const seed = join(root, 'seed')
      const store = join(seed, 'store')
      mkdirSync(store, { recursive: true })
-@@ -161,7 +162,65 @@ describe('desktop seed store archives', () => {
+@@ -161,7 +182,65 @@ describe('desktop seed store archives', () => {
      if (archive === undefined) throw new Error('test seed has no archive')
      archive.entries += 1
      writeFileSync(manifestPath, JSON.stringify(manifest))
@@ -3007,9 +3711,20 @@ index 0000000..f5d6a47
 +  }, 60_000)
 +})
 diff --git a/apps/desktop/tests/update-coordinator.spec.ts b/apps/desktop/tests/update-coordinator.spec.ts
-index 272ef03..8750146 100644
+index 272ef03..2532512 100644
 --- a/apps/desktop/tests/update-coordinator.spec.ts
 +++ b/apps/desktop/tests/update-coordinator.spec.ts
+@@ -3,9 +3,9 @@ import type { AppUpdater } from 'electron-updater'
+ import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
+ import { parseDesktopRelease } from '../src/release.ts'
+ import type { DesktopUpdateState } from '../src/ipc.ts'
+ 
+-vi.mock('electron', () => ({ app: { isPackaged: false } }))
++vi.mock('electron', () => ({ app: { isPackaged: false }, net: {} }))
+ vi.mock('electron-updater', () => ({
+   default: { autoUpdater: { autoDownload: true, autoInstallOnAppQuit: true } },
+ }))
+ 
 @@ -41,8 +41,95 @@ describe('desktop release metadata', () => {
    })
  })
@@ -3117,3 +3832,43 @@ index 272ef03..8750146 100644
    })
  
    it('queues install behind an in-flight check instead of returning the check result', async () => {
+@@ -99,4 +186,39 @@ describe('desktop update coordinator', () => {
+     await expect(installing).resolves.toEqual({ phase: 'ready', version: '1.2.0' })
+     expect(downloadUpdate).toHaveBeenCalledOnce()
+   })
+ })
++
++describe('runtime preparation after a verified download', () => {
++  const updaterFor = () => ({ checkForUpdates: vi.fn(async () => ({ isUpdateAvailable: true,
++    updateInfo: { version: '1.0.1', agentrouter: { runtime: { fingerprint: 'f' } } } })),
++  downloadUpdate: vi.fn(async () => ['C:/pending/AgentRouter-1.0.1-x64-Setup.exe']), quitAndInstall: vi.fn() }) as unknown as AppUpdater
++
++  it('prepares the runtime before offering the restart, once per version', async () => {
++    const coordinator = new DesktopUpdateCoordinator(state => state, async () => {}, updaterFor(), () => true)
++    const prepared = Promise.withResolvers<{ outcome: string }>()
++    const prepare = vi.fn(() => prepared.promise)
++    coordinator.prepareRuntime = prepare
++    await coordinator.check()
++    const download = coordinator.download('1.0.1')
++    await vi.waitFor(() => { expect(prepare).toHaveBeenCalledOnce() })
++    expect(prepare).toHaveBeenCalledWith('1.0.1', ['C:/pending/AgentRouter-1.0.1-x64-Setup.exe'],
++      { version: '1.0.1', agentrouter: { runtime: { fingerprint: 'f' } } })
++    expect(coordinator.status().canInstall).toBe(false)
++    expect(coordinator.status().preparing).toBe(true)
++    prepared.resolve({ outcome: 'prepared' })
++    await download
++    expect(coordinator.status().canInstall).toBe(true)
++    expect(coordinator.status().preparation).toMatchObject({ version: '1.0.1', outcome: 'prepared' })
++  })
++
++  it('never blocks the restart when preparation fails', async () => {
++    const updater = updaterFor()
++    const coordinator = new DesktopUpdateCoordinator(state => state, async () => {}, updater, () => true)
++    coordinator.prepareRuntime = vi.fn(async () => { throw new Error('another package transaction is active') })
++    await coordinator.check(); await coordinator.download('1.0.1')
++    expect(coordinator.status().canInstall).toBe(true)
++    expect(coordinator.status().preparation).toMatchObject({ outcome: 'failed', error: 'another package transaction is active' })
++    await coordinator.restart('1.0.1')
++    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
++  })
++})
