@@ -151,7 +151,8 @@ async function launch(label, expectedVersion) {
       return { response: options.cancelId ?? 1, checkboxChecked: false }
     }
   }, join(out, 'dialogs.log'))
-  await page.waitForURL('dsh-app://app/index.html', { timeout: 300000 })
+  // Releases whose installer does not prepare the runtime build it on this first launch (4-5 min on hosted workers).
+  await page.waitForURL('dsh-app://app/index.html', { timeout: 720000 })
   await expect(page.getByRole('button', { name: '选择工作区', exact: true })).toBeVisible({ timeout: 120000 })
   const usableMs = Date.now() - begin
   const notice = page.getByRole('dialog', { name: '内测声明', exact: true })
@@ -322,6 +323,8 @@ try {
   await step('baseline-first-launch', async () => {
     const { usableMs } = await launch('baseline-first', baseline)
     result.durations.baselineFirstLaunchMs = usableMs
+    result.baselineFirstStartup = tryJson(join(desktopRoot, 'startup.json'))
+    result.baselineInstallerPrepare = tryJson(join(desktopRoot, 'installer-prepare.json'))?.outcome ?? 'absent'
     result.networkPreflight = await networkPreflight()
     await close()
   })
@@ -476,7 +479,6 @@ try {
         result.knownFailure = { step: failedStep, phase: status.phase, message: status.error,
           evidence: summarizeEvents(interceptor.events).resets }
       })
-      knownFailure = true
       result.outcome = 'known-failure'
     } catch (intact) {
       result.failedStep = 'intact-after-known-failure'

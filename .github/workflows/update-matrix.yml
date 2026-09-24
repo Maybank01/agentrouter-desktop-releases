@@ -96,7 +96,7 @@ jobs:
     name: Update ${{ matrix.baseline }} (${{ matrix.mode }})
     needs: plan
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: write
     strategy:

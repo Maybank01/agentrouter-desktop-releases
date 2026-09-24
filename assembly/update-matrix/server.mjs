@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { createReadStream } from 'node:fs'
-import { createServer as createHttpServer } from 'node:http'
+import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { connect, createServer as createNetServer } from 'node:net'
 
@@ -198,8 +198,18 @@ export async function startInterceptor({ mode, releases, latest, key, cert, dire
   let proxy
   if (mode === 'system-proxy') {
     proxy = createHttpServer((req, res) => {
-      record({ kind: 'proxy', method: req.method, target: req.url, action: 'refused-plain-http' })
-      res.writeHead(502); res.end()
+      // Plain HTTP (certificate revocation, OS services) keeps its real destination.
+      let target
+      try { target = new URL(req.url) } catch { res.writeHead(400); res.end(); return }
+      if (target.protocol !== 'http:' || interceptedHosts.includes(target.hostname)) {
+        record({ kind: 'proxy', method: req.method, target: req.url, action: 'refused-plain-http' })
+        res.writeHead(502); res.end(); return
+      }
+      const upstream = httpRequest(target, { method: req.method, headers: req.headers }, response => {
+        res.writeHead(response.statusCode, response.headers); response.pipe(res)
+      })
+      upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end() })
+      req.pipe(upstream)
     })
     proxy.on('connect', (req, client, head) => {
       client.on('error', () => {})
