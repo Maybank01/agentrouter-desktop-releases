@@ -92,7 +92,15 @@ const assertWorkspaceUiPath = async page => {
   if (marker?.outcome === 'created') await expect(chip).toContainText('AgentRouter', { timeout: 30000 })
   const folder = join(state, `界面选择-${randomUUID().slice(0, 8)}`)
   mkdirSync(folder, { recursive: true })
-  await chip.click()
+  // First-run notices (plugin welcome, login, notifications) can open after the
+  // page is ready; a real user closes them before reaching the composer.
+  await expect(async () => {
+    for (const name of ['继续', '稍后登录，关闭引导', '稍后配置', '下次再说']) {
+      const button = page.getByRole('button', { name, exact: true }).first()
+      if (await button.isVisible().catch(() => false)) await button.click({ timeout: 3000 }).catch(() => {})
+    }
+    await chip.click({ timeout: 3000 })
+  }).toPass({ timeout: 60000, intervals: [500, 1000] })
   const add = page.getByRole('menuitem', { name: /^添加工作区/ })
   if (await add.waitFor({ timeout: 5000 }).then(() => true, () => false)) await add.click()
   const answer = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
