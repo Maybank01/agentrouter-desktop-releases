@@ -438,8 +438,8 @@ index 8bc9fdc..6dc9bc5 100644
 -    if (new URL(url).protocol !== `${SCHEME}:`) event.preventDefault()
 +  window.on('page-title-updated', (event, pageTitle) => {
 +    event.preventDefault()
-+    window.setTitle(pageTitle.endsWith(' — DeepSeek Harness')
-+      ? `${pageTitle.slice(0, -'DeepSeek Harness'.length)}AgentRouter`
++    window.setTitle(/ — (?:DeepSeek Harness|AgentRouter)$/.test(pageTitle)
++      ? pageTitle.replace(/DeepSeek Harness$/, 'AgentRouter')
 +      : title)
 +  })
 +  installExternalWebNavigation(window.webContents, (url: string) => shell.openExternal(url), () => {
