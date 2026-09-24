@@ -55,7 +55,8 @@ async function download(version) {
 }
 
 function installedExecutable() {
-  const location = ps(`Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'AgentRouter*' } | Select-Object -First 1 -ExpandProperty InstallLocation`)
+  const uninstall = ps(`Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'AgentRouter*' } | ForEach-Object { [string]$_.UninstallString } | Select-Object -First 1`)
+  const location = /^"?([^"]+\\)[^\\"]+\.exe/i.exec(uninstall)?.[1]
   const candidates = [location && join(location, 'AgentRouter.exe'), join(process.env.LOCALAPPDATA, 'Programs/AgentRouter/AgentRouter.exe'),
     join(process.env.LOCALAPPDATA, 'Programs/agentrouter-desktop/AgentRouter.exe')].filter(Boolean)
   const found = candidates.find(path => existsSync(path))
