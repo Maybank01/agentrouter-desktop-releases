@@ -123,5 +123,6 @@ test('failure messages distinguish metadata, locked files and integrity without 
   assert.match(updateFailureMessage({ code: 'UPDATE_METADATA_UNAVAILABLE' }), /网络.*保留/)
   assert.match(updateFailureMessage({ code: 'UPDATE_CACHE_UNAVAILABLE' }), /占用/)
   assert.match(updateFailureMessage({ code: 'UPDATE_FILE_INVALID' }), /校验失败/)
+  assert.match(updateFailureMessage({ code: 'UPDATE_DOWNLOAD_INTERRUPTED', transferred: 52428800 }), /50.0 MB 已保留.*继续下载/)
   assert.ok(!updateFailureMessage(new Error('private account/path')).includes('private'))
 })

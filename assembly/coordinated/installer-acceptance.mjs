@@ -24,6 +24,11 @@ const scenarios = ['native-updater', 'legacy-migration', 'fresh-install-recovery
 const scenario = process.argv.find(value => value.startsWith('--scenario='))?.slice('--scenario='.length)
 assert.ok(scenario === undefined || scenarios.includes(scenario), `Unknown scenario ${scenario}; expected one of ${scenarios.join(', ')}`)
 const selected = new Set(scenario ? [scenario] : ['native-updater', 'legacy-migration'])
+// The fresh-install scenario shares its acceptance state with the installer.
+const acceptanceState = selected.has('fresh-install-recovery') && !selected.has('native-updater')
+  ? (mkdirSync(join(root, '.local/coordinated/acceptance'), { recursive: true }),
+    mkdtempSync(join(root, '.local/coordinated/acceptance', 'installed-')))
+  : undefined
 const nativeUpdater = selected.has('native-updater')
 const signedTarget = signedReceiptFile ? json(resolve(signedReceiptFile)) : undefined
 if (signedTarget) {
@@ -54,15 +59,17 @@ async function run(exe, args, name, overrides = {}) {
   console.error(JSON.stringify({ installerAcceptance: name, phase: 'passed', durationMs: Date.now() - started }))
   return log
 }
-const node = (script, args, name) => run(process.execPath, [join(directory, script), ...args], name)
+const node = (script, args, name, overrides) => run(process.execPath, [join(directory, script), ...args], name, overrides)
 const lastResult = log => JSON.parse(readFileSync(log, 'utf8').trim().split(/\r?\n/).at(-1))
 let baselineFile, baseline
 if (nativeUpdater) {
-  // Native-update acceptance uses identical plugin/runtime inputs to prove shell
-  // updates retain the active graph, so the baseline always takes the target's
-  // plugin. The legacy installer still exercises a real old-plugin migration,
-  // including stale registry metadata.
-  const baselineInput = { ...json(join(directory, 'installer-baseline.json')), plugin: target.input.plugin,
+  // A product update normally ships another managed plugin: the baseline takes the
+  // recorded preceding plugin, so the restart must activate a runtime prepared in
+  // the background. Without a recorded plugin (or when it equals the target's) the
+  // same run proves an identical runtime is retained. The legacy installer still
+  // exercises a real old-plugin migration, including stale registry metadata.
+  const recorded = json(join(directory, 'installer-baseline.json'))
+  const baselineInput = { ...recorded, plugin: recorded.plugin ?? target.input.plugin,
     ...(signedTarget ? { signing: target.input.signing } : {}) }
   assert.equal(baselineInput.dshVersion, target.input.dshVersion)
   const baselineInputFile = join(work, signedTarget ? 'signed-baseline-input.json' : 'baseline-input.json')
@@ -73,6 +80,10 @@ if (nativeUpdater) {
 const files = new Map()
 const requests = []
 const transfers = []
+// Interrupt the first ranged installer response mid-body, as a dropped mobile or
+// cross-border connection would; the updater must resume and still complete.
+const faults = []
+let dropNextInstallerRange = nativeUpdater
 const server = createServer((req, res) => {
   const name = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname.slice(1))
   const file = files.get(name)
@@ -92,6 +103,15 @@ const server = createServer((req, res) => {
     res.setHeader('accept-ranges', 'bytes')
     res.setHeader('content-range', 'bytes ' + start + '-' + end + '/' + file.bytes)
     res.writeHead(206)
+    if (dropNextInstallerRange && name.endsWith('.exe') && bytes > 1024) {
+      dropNextInstallerRange = false
+      const sent = Math.floor(bytes / 2)
+      faults.push({ name, range, sent })
+      transfers.push({ name, bytes: sent, range, interrupted: true })
+      createReadStream(file.path, { start, end: start + sent - 1 }).on('data', chunk => res.write(chunk))
+        .on('end', () => { res.socket.destroy() })
+      return
+    }
     transfers.push({ name, bytes, range })
     createReadStream(file.path, { start, end }).pipe(res)
   } else if (req.method === 'HEAD') res.end()
@@ -99,9 +119,21 @@ const server = createServer((req, res) => {
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const feed = `http://127.0.0.1:${server.address().port}/`
-const install = (installer, destination, name) => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-  '$ErrorActionPreference = "Stop"; $p = Start-Process -FilePath $env:AGENTROUTER_TEST_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:AGENTROUTER_TEST_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "NSIS failed: $($p.ExitCode)" }'], name,
-{ AGENTROUTER_TEST_INSTALLER: installer, AGENTROUTER_TEST_INSTALL_DIR: destination })
+// The installer materializes the runtime in the Home it runs with; each install
+// names an isolated Home so no default location of the worker is touched early.
+const install = async (installer, destination, name, home) => {
+  const started = Date.now()
+  await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    '$ErrorActionPreference = "Stop"; $p = Start-Process -FilePath $env:AGENTROUTER_TEST_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:AGENTROUTER_TEST_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "NSIS failed: $($p.ExitCode)" }'], name,
+  { AGENTROUTER_TEST_INSTALLER: installer, AGENTROUTER_TEST_INSTALL_DIR: destination, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' })
+  const preparation = join(home, 'desktop/installer-prepare.json')
+  const record = { name, installMs: Date.now() - started,
+    installerPrepare: existsSync(preparation) ? json(preparation) : undefined }
+  console.error(JSON.stringify({ installed: record }))
+  installs.push(record)
+  return record
+}
+const installs = []
 try {
   // Packages go to separate candidate outputs; build both NSIS installers at once.
   const packageInstaller = (candidate, feedArg, name) => node('package-installer.mjs', [candidate, feedArg + feed], name)
@@ -117,7 +149,7 @@ try {
   writeJson(installedTarget, { ...target, executable })
   let update, differential, legacy, migration, freshInstallRecovery
   if (nativeUpdater) {
-    await install(baselinePackage.installer, installed, 'install-baseline')
+    await install(baselinePackage.installer, installed, 'install-baseline', join(work, 'baseline-installer-home'))
     assert.ok(existsSync(executable))
     const installedBaseline = join(work, 'baseline-installed.json')
     writeJson(installedBaseline, { ...baseline, executable })
@@ -136,13 +168,18 @@ try {
     const downloadedBytes = installerTransfers.reduce((sum, entry) => sum + entry.bytes, 0)
     assert.ok(installerTransfers.length > 0 && installerTransfers.every(entry => entry.range), 'Native updater must use differential ranges without full-download fallback')
     assert.ok(downloadedBytes < installerAsset.bytes * 0.2, 'A shell-only update must transfer less than 20% of the full installer')
+    assert.equal(faults.length, 1, 'The acceptance feed must interrupt one installer transfer')
     differential = { fullBytes: installerAsset.bytes, downloadedBytes,
-      ratio: downloadedBytes / installerAsset.bytes, requests: installerTransfers.length, fullFallback: false }
+      ratio: downloadedBytes / installerAsset.bytes, requests: installerTransfers.length, fullFallback: false,
+      interruptedTransfer: faults[0], resumedAfterInterruption: true }
     console.error(JSON.stringify({ differential }))
   } else {
     // A fresh installation of the target, independent of any native-update state.
-    await install(targetPackage.installer, installed, 'install-target')
+    // The fresh-install scenario's first launch uses the Home the installer prepared.
+    const home = acceptanceState ? join(acceptanceState, 'home') : join(work, 'target-installer-home')
+    const { installerPrepare } = await install(targetPackage.installer, installed, 'install-target', home)
     assert.ok(existsSync(executable))
+    if (acceptanceState) assert.equal(installerPrepare?.outcome, 'installed', 'The installer must materialize the runtime before the first launch')
   }
 
   if (selected.has('legacy-migration')) {
@@ -153,7 +190,7 @@ try {
     await pipeline(Readable.fromWeb(response.body), createWriteStream(legacyInstaller))
     assert.equal(createHash('sha256').update(readFileSync(legacyInstaller)).digest('hex'), legacy.sha256)
     const legacyDirectory = join(work, 'previous-community')
-    await install(legacyInstaller, legacyDirectory, 'install-legacy')
+    await install(legacyInstaller, legacyDirectory, 'install-legacy', join(work, 'legacy-installer-home'))
     await node('acceptance.mjs', [installedTarget, '--legacy-executable=' + join(legacyDirectory, 'DSH Desktop.exe')], 'legacy-migration')
     migration = json(join(target.output, 'acceptance.json'))
     assert.equal(migration.legacyProfileMigration, true)
@@ -162,7 +199,7 @@ try {
   if (selected.has('fresh-install-recovery')) {
     // The single-install path of signed installed acceptance: a fresh Profile,
     // interrupted runtime repair, then explicit credential-file recovery.
-    await node('acceptance.mjs', [installedTarget], 'fresh-install-recovery')
+    await node('acceptance.mjs', [installedTarget], 'fresh-install-recovery', { AGENTROUTER_ACCEPTANCE_STATE: acceptanceState })
     freshInstallRecovery = json(join(target.output, 'acceptance.json'))
     assert.equal(freshInstallRecovery.productUpgrade, false)
     assert.equal(freshInstallRecovery.externalBrowserNavigation, true)
@@ -176,7 +213,7 @@ try {
     freshInstallerExecuted: true, nativeUpdaterExecuted: nativeUpdater, installerRestartedApp: nativeUpdater,
     legacyInstallerExecuted: selected.has('legacy-migration'), publicFeedChanged: false, update, migration,
     nativeSignatureVerificationExecuted: Boolean(signedTarget) && nativeUpdater, rootTrustInstalled: false,
-    differential, feedRequests: [...new Set(requests)] }
+    differential, feedRequests: [...new Set(requests)], installs }
   if (scenario) Object.assign(receipt, { scenario, freshInstallRecovery })
   writeJson(join(target.output, 'installer-acceptance.json'), receipt)
   console.log(JSON.stringify({ passed: true, receipt: join(target.output, 'installer-acceptance.json') }))

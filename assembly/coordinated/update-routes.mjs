@@ -66,6 +66,7 @@ export function createProductUpdateRoutes({ coordinator, productVersion, fetchHo
       host: { version: knownHost, channel: 'next', phase: 'unknown' },
       busy, canDownload: state.canDownload, canInstall: state.canInstall && activityKnown && !busy,
       checkedAt: state.checkedAt, progress: state.progress, error: state.error, history: knownHistory,
+      ...(state.preparing ? { preparing: true } : {}), ...(state.preparation ? { preparation: state.preparation } : {}),
       ...(!state.enabled ? { unavailableReason: '当前运行方式未配置客户端更新。' }
         : !activityKnown ? { unavailableReason: '正在等待客户端就绪，恢复连接后可以重启更新。' } : {}) }
   }

@@ -10,6 +10,11 @@ export function updateFailureMessage(error) {
     case 'UPDATE_CACHE_UNAVAILABLE': return '更新文件暂时被占用，请关闭尚未结束的安装窗口后重试。'
     case 'ERR_UPDATER_INVALID_SIGNATURE':
     case 'UPDATE_FILE_INVALID': return '更新文件校验失败，请重新下载。'
+    case 'UPDATE_DOWNLOAD_INTERRUPTED': {
+      const kept = Number.isSafeInteger(error.transferred) && error.transferred > 0
+        ? `已下载的 ${(error.transferred / 1048576).toFixed(1)} MB 已保留，` : ''
+      return `网络连接中断，下载已暂停。${kept}点击“继续下载”会从断点继续。`
+    }
     default: return '更新下载未完成，请检查网络后重试。'
   }
 }
