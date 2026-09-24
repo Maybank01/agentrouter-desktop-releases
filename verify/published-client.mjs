@@ -81,26 +81,28 @@ function tree(dir, depth = 0) {
 async function launch(executable, label) {
   const previous = readJson(startupFile)?.startedAt
   const started = Date.now()
-  child = spawn(executable, [`--remote-debugging-port=${PORT}`], { detached: false, stdio: 'ignore', windowsHide: false })
+  child = spawn(executable, [`--remote-debugging-port=${PORT}`, '--lang=zh-CN'], { detached: false, stdio: 'ignore', windowsHide: false })
   let browser
   for (let attempt = 0; attempt < 240 && !browser; attempt++) {
     try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { timeout: 2000 }) } catch { await sleep(250) }
   }
   assert.ok(browser, 'CDP endpoint')
+  // Usable: the application shell (not the startup/progress page) shows its Settings entry.
   let page
-  for (let attempt = 0; attempt < 240 && !page; attempt++) {
-    page = browser.contexts().flatMap(context => context.pages()).find(row => row.url().startsWith('dsh-app://'))
+  const deadline = Date.now() + 480000
+  while (!page && Date.now() < deadline) {
+    for (const candidate of browser.contexts().flatMap(context => context.pages())) {
+      current = candidate
+      if (candidate.url().startsWith('dsh-app://app') && await candidate.getByRole('button', { name: /^(设置|Settings)$/ }).first().isVisible().catch(() => false)) { page = candidate; break }
+    }
     if (!page) await sleep(250)
   }
-  assert.ok(page, 'application page')
-  current = page
-  const composer = page.locator('textarea, [contenteditable="true"]').first()
-  try { await composer.waitFor({ state: 'visible', timeout: 480000 }) }
-  catch (error) {
+  if (!page) {
     log('launch-diagnostics', { pages: browser.contexts().flatMap(context => context.pages()).map(row => row.url()),
-      body: (await page.evaluate(() => document.body?.innerText?.slice(0, 1500)).catch(() => undefined)), files: tree(home) })
-    throw error
+      body: (await current?.evaluate(() => document.body?.innerText?.slice(0, 1500)).catch(() => undefined)), files: tree(home) })
+    throw new Error('The application shell did not become usable within 480 s')
   }
+  current = page
   const usableMs = Date.now() - started
   let startup
   for (let attempt = 0; attempt < 240; attempt++) {
@@ -122,7 +124,7 @@ async function screenshot(page, name) {
 
 async function dismiss(page) {
   for (let round = 0; round < 3; round++) {
-    for (const name of ['继续', '稍后登录，关闭引导', '稍后登录', '稍后配置', '下次再说', '关闭通知']) {
+    for (const name of ['继续', 'Continue', '稍后登录，关闭引导', '稍后登录', '稍后配置', '下次再说', '关闭通知']) {
       const button = page.getByRole('button', { name, exact: true }).first()
       if (await button.isVisible().catch(() => false)) await button.click({ timeout: 3000 }).catch(() => {})
     }
