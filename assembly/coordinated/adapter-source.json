@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "7755b04bd7c5d4daa857366585de3c35702ef167",
+  "commit": "8e89c2a4c84334f71d6d146631141c46a0c73c45",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -32,8 +32,8 @@
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 156734,
-      "sha256": "c77a7c7eb3d3e490e790876fdfa9fbe7a5b0a6269c329ef996224e2490fba0c4"
+      "bytes": 160388,
+      "sha256": "de2aa337c838a30bec2b293067cc389557a4324d38985dd0939fa1501f77b6ad"
     },
     {
       "path": "installer-acceptance.mjs",
