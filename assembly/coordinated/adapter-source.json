@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "ecef0b7fcad58d48179beb56fa2eab47dd1f1462",
+  "commit": "16470cfb01323d0419d25e468866818c9dabf18e",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
@@ -32,8 +32,8 @@
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 205206,
-      "sha256": "5e5077f478a27a722c0f5f6726ae158062ed92746555111eeb3dce77d8a97b21"
+      "bytes": 206110,
+      "sha256": "b39dc7e1e0c32577268df0685490de847ba758177a6a95404ff1f7becc97ec30"
     },
     {
       "path": "installer-acceptance.mjs",
@@ -73,7 +73,7 @@
     {
       "path": "release.json",
       "bytes": 711,
-      "sha256": "b5bd7f0981f9f4ff3f6a9a6cfdb6d8f260f85bdc06c4a90da5ccce9a66be48b7"
+      "sha256": "027c74817d94a754df7a04946938d7da59790aea74cb5c51bc6ce6026849f77e"
     },
     {
       "path": "store-migration-acceptance.mjs",
@@ -192,8 +192,8 @@
     },
     {
       "path": "release-history.json",
-      "bytes": 6335,
-      "sha256": "96b510e5d57a688bd2e1decd3aa07e22a378a32914a6ebd9c0914ed5a61537bb"
+      "bytes": 6689,
+      "sha256": "8ae163f1cc53d14c48eb40963ad9e05b7ca4aa944942a51b1dfe5881b39ab98c"
     },
     {
       "path": "update-center.md",
@@ -297,13 +297,13 @@
     },
     {
       "path": "update-transport.mjs",
-      "bytes": 13186,
-      "sha256": "bd87eeeac26ab1ae32c3ae4f5cfe7f999d9699950fbc1dcf916b6893265f6cc3"
+      "bytes": 13642,
+      "sha256": "26f1398b592bfe0b57cc5d72c1ff25e24423a12b433ad3ff0ede8cd2efe734dd"
     },
     {
       "path": "update-transport.test.mjs",
-      "bytes": 11912,
-      "sha256": "cfb5db6e7618198cad9e2a16f186a96755e324a776d2f62a25a203e38b4412a8"
+      "bytes": 13081,
+      "sha256": "caea269ce7d97110b20cda5b70905975737de6d712ecd6e9e04a0f0704f75d4c"
     },
     {
       "path": "update-rollout.mjs",

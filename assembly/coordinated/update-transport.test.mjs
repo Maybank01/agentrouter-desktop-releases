@@ -52,6 +52,15 @@ test('maps release files to the mirror first and their immutable GitHub tag seco
   assert.deepEqual(downloadSources('https://github.com/other/repo/releases/download/v1.0.0/x.exe'), ['https://github.com/other/repo/releases/download/v1.0.0/x.exe'])
 })
 
+test('the feed request keeps mirror-first order despite the updater cache-busting query', () => {
+  const feed = 'https://github.com/Maybank01/agentrouter-desktop-releases/releases/latest/download/latest.yml?noCache=1k39pi737'
+  assert.deepEqual(downloadSources(feed), ['https://agentrouter.top/downloads/desktop/latest.yml', feed])
+  assert.deepEqual(downloadSources('https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v3.0.22/AgentRouter-3.0.22-x64-Setup.exe.blockmap?x=1'), [
+    'https://agentrouter.top/downloads/desktop/v3.0.22/AgentRouter-3.0.22-x64-Setup.exe.blockmap',
+    'https://github.com/Maybank01/agentrouter-desktop-releases/releases/download/v3.0.22/AgentRouter-3.0.22-x64-Setup.exe.blockmap'])
+  assert.deepEqual(downloadSources('not a url'), ['not a url'])
+})
+
 test('resumes with HTTP Range after connection drops and verifies SHA-512', async () => {
   const server = await flakyServer({ drops: 2 })
   const root = temporary()
@@ -163,6 +172,9 @@ test('installs on the updater: resumable installers, mirrored ranges and differe
     executor.createRequest({ protocol: 'https:', hostname: 'github.com', path: '/Maybank01/agentrouter-desktop-releases/releases/latest/download/AgentRouter-3.0.20-x64-Setup.exe' }, () => {})
     assert.equal(calls.at(-1)[1], 'https://agentrouter.top/downloads/desktop/v3.0.20/AgentRouter-3.0.20-x64-Setup.exe')
     assert.equal(await executor.request({ protocol: 'https:', hostname: 'github.com', path: '/Maybank01/agentrouter-desktop-releases/releases/latest/download/latest.yml' }), 'yaml')
+    assert.equal(calls.at(-1)[1], 'https://agentrouter.top/downloads/desktop/latest.yml')
+    // The exact request electron-updater issues: a random noCache query.
+    assert.equal(await executor.request({ protocol: 'https:', hostname: 'github.com', path: '/Maybank01/agentrouter-desktop-releases/releases/latest/download/latest.yml?noCache=1k39pi737' }), 'yaml')
     assert.equal(calls.at(-1)[1], 'https://agentrouter.top/downloads/desktop/latest.yml')
     // The first differential attempt fails; the retry succeeds without a full download.
     assert.equal(await updater.differentialDownloadInstaller({}, {}), false)
