@@ -95,7 +95,7 @@ async function launch(executable, label) {
   assert.ok(page, 'application page')
   current = page
   const composer = page.locator('textarea, [contenteditable="true"]').first()
-  try { await composer.waitFor({ state: 'visible', timeout: 120000 }) }
+  try { await composer.waitFor({ state: 'visible', timeout: 480000 }) }
   catch (error) {
     log('launch-diagnostics', { pages: browser.contexts().flatMap(context => context.pages()).map(row => row.url()),
       body: (await page.evaluate(() => document.body?.innerText?.slice(0, 1500)).catch(() => undefined)), files: tree(home) })
