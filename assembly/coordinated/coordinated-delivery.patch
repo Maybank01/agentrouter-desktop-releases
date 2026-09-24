@@ -1824,10 +1824,10 @@ index e4b4759..bce8158 100644
  }
 diff --git a/apps/desktop/src/staging-processes.ts b/apps/desktop/src/staging-processes.ts
 new file mode 100644
-index 0000000..9e49eb1
+index 0000000..f765170
 --- /dev/null
 +++ b/apps/desktop/src/staging-processes.ts
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,97 @@
 +import { execFile } from 'node:child_process'
 +import { basename, resolve } from 'node:path'
 +
@@ -1847,16 +1847,30 @@ index 0000000..9e49eb1
 +// parents and other installations are never used as a criterion.
 +const QUERY_SCRIPT = String.raw`
 +$ErrorActionPreference = 'Stop'
-+$directory = [IO.Path]::GetFullPath($env:AGENTROUTER_OWNED_DIRECTORY).TrimEnd('\')
-+$prefix = $directory + '\'
++# Windows PowerShell's GetFullPath expands 8.3 names (RUNNER~1 -> runneradmin),
++# while processes keep the spelling they were started with. Match both forms.
++$given = $env:AGENTROUTER_OWNED_DIRECTORY.Replace('/', '\').TrimEnd('\')
++$directories = @($given, [IO.Path]::GetFullPath($given).TrimEnd('\')) | Select-Object -Unique
 +$self = $PID
++function Test-Inside([string]$text, [bool]$prefixOnly) {
++  if (!$text) { return $false }
++  $candidate = $text.Replace('/', '\')
++  foreach ($directory in $directories) {
++    if ($prefixOnly) {
++      if ($candidate.StartsWith($directory + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
++    } elseif ($candidate.IndexOf($directory, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
++  }
++  if ($prefixOnly) {
++    try { $long = [IO.Path]::GetFullPath($candidate) } catch { return $false }
++    foreach ($directory in $directories) {
++      if ($long.StartsWith($directory + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
++    }
++  }
++  return $false
++}
 +function Select-Owned {
 +  @(Get-CimInstance Win32_Process | Where-Object {
-+    if ($_.ProcessId -eq $self) { return $false }
-+    $path = $_.ExecutablePath
-+    $line = $_.CommandLine
-+    ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) -or
-+      ($line -and $line.Replace('/', '\').IndexOf($directory, [StringComparison]::OrdinalIgnoreCase) -ge 0)
++    $_.ProcessId -ne $self -and ((Test-Inside $_.ExecutablePath $true) -or (Test-Inside $_.CommandLine $false))
 +  })
 +}
 +$found = @(Select-Owned)
