@@ -27,7 +27,13 @@ export async function observePlugin(plugin, { requireNext = false, fetcher = fet
   const version = packument.versions?.[plugin.version]
   if (!version) return { state: 'pending', reason: `version ${plugin.version} not visible` }
   assert.equal(version.dist?.integrity, plugin.integrity, `npm ${plugin.name}@${plugin.version} is a different artifact than the locked candidate`)
-  if (requireNext && packument['dist-tags']?.next !== plugin.version) return { state: 'pending', reason: `next is ${packument['dist-tags']?.next}` }
+  const next = packument['dist-tags']?.next
+  if (requireNext && next !== plugin.version) {
+    // Waiting only helps while the locked version is newer than next; a newer
+    // next needs a reviewed input change (or retain_plugin_reason), not time.
+    assert.ok(!(packument.time?.[next] > packument.time?.[plugin.version]), `npm next ${next} is newer than the locked plugin ${plugin.version}`)
+    return { state: 'pending', reason: `next is ${next}` }
+  }
   const tarball = await fetcher(version.dist.tarball, { signal: AbortSignal.timeout(120_000) })
   if (tarball.status === 404) return { state: 'pending', reason: 'tarball not replicated' }
   assert.equal(tarball.status, 200, `npm tarball returned ${tarball.status}`)

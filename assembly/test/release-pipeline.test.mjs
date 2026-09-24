@@ -20,6 +20,8 @@ test('npm wait accepts only the exact locked candidate bytes', async () => {
   assert.equal((await observePlugin(plugin, { fetcher: registry(packument(), null) })).state, 'pending')
   assert.equal((await observePlugin(plugin, { requireNext: true, fetcher: registry(packument({ 'dist-tags': { next: '0.16.1' } })) })).state, 'pending')
   assert.equal((await observePlugin(plugin, { requireNext: true, fetcher: registry(packument()) })).state, 'verified')
+  await assert.rejects(observePlugin(plugin, { requireNext: true, fetcher: registry(packument({ 'dist-tags': { next: '0.16.3' },
+    time: { '0.16.2': '2026-09-24T03:34:32Z', '0.16.3': '2026-09-25T00:00:00Z' } })) }), /newer than the locked/)
   await assert.rejects(observePlugin(plugin, { fetcher: registry(packument({ versions: { '0.16.2': { dist: { integrity: 'sha512-other', tarball: 'x.tgz' } } } })) }), /different artifact/)
   await assert.rejects(observePlugin(plugin, { fetcher: registry(packument(), Buffer.from('other bytes of equal size!')) }), /size|SHA-256/)
 })
