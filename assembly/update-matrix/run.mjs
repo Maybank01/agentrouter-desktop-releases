@@ -73,6 +73,15 @@ const result = { schemaVersion: 1, kind: 'update-matrix-cell', baseline, candida
     image: process.env.ImageOS, imageVersion: process.env.ImageVersion } }
 const started = Date.now()
 let currentStep
+// A stray socket error in the local services must not kill the cell silently:
+// record it, keep going, and let the step deadlines decide the outcome.
+for (const event of ['uncaughtException', 'unhandledRejection']) process.on(event, error => {
+  const entry = { event, step: currentStep, error: String(error?.stack ?? error).slice(0, 2000) }
+  ;(result.harnessErrors ??= []).push(entry)
+  console.error(JSON.stringify({ updateMatrix: `${baseline}-${mode}`, harnessError: entry }))
+})
+process.on('exit', code => { if (result.outcome === undefined) console.error(JSON.stringify({ updateMatrix: `${baseline}-${mode}`, exitedEarly: code, step: currentStep })) })
+writeFileSync(resultFile, JSON.stringify({ ...result, outcome: 'running' }, null, 2) + '\n')
 async function step(name, operation) {
   currentStep = name
   const begin = Date.now()
