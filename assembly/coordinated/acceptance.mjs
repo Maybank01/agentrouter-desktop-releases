@@ -92,17 +92,29 @@ const assertWorkspaceUiPath = async page => {
   if (marker?.outcome === 'created') await expect(chip).toContainText('AgentRouter', { timeout: 30000 })
   const folder = join(state, `界面选择-${randomUUID().slice(0, 8)}`)
   mkdirSync(folder, { recursive: true })
-  // First-run notices (plugin welcome, login, notifications) can open after the
-  // page is ready; a real user closes them before reaching the composer.
-  await expect(async () => {
+  // First-run notices (plugin welcome, the modal "连接 AgentRouter" onboarding,
+  // notifications) can open asynchronously, even after the workspace menu is
+  // already open (CI 35958865281, 35951504050, 35950064412). A real user closes
+  // them and reopens the menu; do the same until the menu item itself is clicked.
+  const dismissNotices = async () => {
     for (const name of ['继续', '稍后登录，关闭引导', '稍后配置', '下次再说']) {
       const button = page.getByRole('button', { name, exact: true }).first()
       if (await button.isVisible().catch(() => false)) await button.click({ timeout: 3000 }).catch(() => {})
     }
-    await chip.click({ timeout: 3000 })
-  }).toPass({ timeout: 60000, intervals: [500, 1000] })
+    const onboarding = page.locator('dialog.ar-onboarding[open]')
+    if (await onboarding.count().catch(() => 0)) await expect(onboarding).toHaveCount(0, { timeout: 3000 })
+  }
   const add = page.getByRole('menuitem', { name: /^添加工作区/ })
-  if (await add.waitFor({ timeout: 5000 }).then(() => true, () => false)) await add.click()
+  await expect(async () => {
+    await dismissNotices()
+    if (!await add.isVisible().catch(() => false)) {
+      await chip.click({ timeout: 3000 })
+      // Builds without the menu open the native folder dialog from the chip itself.
+      if (!await add.waitFor({ timeout: 5000 }).then(() => true, () => false)) return
+    }
+    await dismissNotices()
+    await add.click({ timeout: 3000 })
+  }).toPass({ timeout: 90000, intervals: [500, 1000] })
   const answer = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
     join(directory, 'workspace-picker-acceptance.ps1'), '-Folder', folder], { windowsHide: true, timeout: 90000, encoding: 'utf8' })
   await expect(chip).toContainText(basename(folder), { timeout: 30000 })

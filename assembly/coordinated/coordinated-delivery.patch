@@ -360,7 +360,7 @@ index d057d6d..970a2b5 100644
    readonly dshVersion: string
  } | {
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..6dc9bc5 100644
+index 8bc9fdc..886d402 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
 @@ -1,16 +1,18 @@
@@ -767,7 +767,7 @@ index 8bc9fdc..6dc9bc5 100644
    app.exit(1)
  })
 diff --git a/apps/desktop/src/project-manager.ts b/apps/desktop/src/project-manager.ts
-index b9b94f7..3048a93 100644
+index b9b94f7..1231db8 100644
 --- a/apps/desktop/src/project-manager.ts
 +++ b/apps/desktop/src/project-manager.ts
 @@ -15,14 +15,16 @@ import {
@@ -788,7 +788,20 @@ index b9b94f7..3048a93 100644
    DESKTOP_PACKAGES_DIR,
    DESKTOP_PACKAGE_SET_FILE,
    DESKTOP_HOST_PACKAGE,
-@@ -40,15 +42,17 @@ const DESKTOP_PROJECT_FILES = [
+@@ -33,22 +35,30 @@ import {
+ } from './core-package-set.ts'
+ import type { DesktopPaths } from './paths.ts'
+ import { parseDesktopRelease, type DesktopRelease } from './release.ts'
+ import { extractPnpmStoreArchives, mergePnpmStore } from './seed-store.ts'
++import {
++  describeOwnedDirectoryProcesses,
++  isOwnedTransactionDirectory,
++  queryWindowsOwnedDirectoryProcesses,
++  type OwnedDirectoryProcessQuery,
++} from './staging-processes.ts'
+ 
+ /** Files the package transaction copies between active and staging projects. */
+ const DESKTOP_PROJECT_FILES = [
    'package.json',
    'pnpm-lock.yaml',
    'pnpm-workspace.yaml',
@@ -806,7 +819,7 @@ index b9b94f7..3048a93 100644
  
  /** Installed desktop project manifest slice. */
  interface DesktopProjectManifest {
-@@ -78,8 +82,9 @@ export interface DesktopRuntimeExecutables {
+@@ -78,8 +88,9 @@ export interface DesktopRuntimeExecutables {
  }
  
  /** Hooks that bind project replacement to backend lifecycle and health. */
@@ -816,16 +829,16 @@ index b9b94f7..3048a93 100644
    healthCheck(projectDir: string): Promise<void>
    /** Stop the active backend and await process exit before directory moves. */
    beforeActivate(): Promise<void>
-@@ -108,8 +113,19 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|
+@@ -108,8 +119,19 @@ const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|
  const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]*$/u
  const MAX_PNPM_DIAGNOSTIC_BYTES = 64 * 1024
  const DESKTOP_REGISTRY = 'https://registry.npmjs.org/'
  
-+class PnpmCommandError extends Error {
++export class PnpmCommandError extends Error {
 +  readonly offlineCacheMiss: boolean
 +  readonly staleMetadata: boolean
 +
-+  constructor(status: string, diagnostics: string) {
++  constructor(readonly status: string, diagnostics: string) {
 +    super(`desktop project: pnpm exited with ${status}${diagnostics.trim() === '' ? '' : `: ${diagnostics.trim()}`}`)
 +    this.staleMetadata = /\bERR_PNPM_NO_MATCHING_VERSION\b/u.test(diagnostics)
 +    this.offlineCacheMiss = this.staleMetadata || /\bERR_PNPM_NO_OFFLINE_(?:META|TARBALL)\b/u.test(diagnostics)
@@ -836,7 +849,7 @@ index b9b94f7..3048a93 100644
    return reason instanceof Error ? reason : new Error(fallback)
  }
  
-@@ -120,18 +136,19 @@ function writeJson(path: string, value: unknown): void {
+@@ -120,18 +142,19 @@ function writeJson(path: string, value: unknown): void {
  function readJson(path: string): unknown {
    return JSON.parse(readFileSync(path, 'utf8'))
  }
@@ -858,7 +871,7 @@ index b9b94f7..3048a93 100644
  
  function releaseFile(projectDir: string): DesktopRelease {
    return parseDesktopRelease(readJson(join(projectDir, 'desktop-release.json')))
-@@ -178,17 +195,54 @@ export function packageNameFromSpec(spec: string): string | undefined {
+@@ -178,17 +201,66 @@ export function packageNameFromSpec(spec: string): string | undefined {
    if (versionAt !== -1) assertVersion(spec.slice(versionAt + 1))
    return name
  }
@@ -875,6 +888,8 @@ index b9b94f7..3048a93 100644
 +  readonly rename?: (from: string, to: string) => void
 +  readonly sleep?: (milliseconds: number) => Promise<void>
 +  readonly delays?: readonly number[]
++  /** Names the processes still using the source after the retry budget; diagnostics only. */
++  readonly describeHolders?: (path: string) => Promise<string>
 +}
 +
 +/**
@@ -895,7 +910,17 @@ index b9b94f7..3048a93 100644
 +    } catch (error) {
 +      const code = (error as NodeJS.ErrnoException | undefined)?.code
 +      const delay = delays[attempt]
-+      if (!retry || delay === undefined || typeof code !== 'string' || !TRANSIENT_RENAME_CODES.has(code)) throw error
++      if (!retry || typeof code !== 'string' || !TRANSIENT_RENAME_CODES.has(code)) throw error
++      if (delay === undefined) {
++        // A persistent hold is not transient. Name the holders so the next failure
++        // identifies its cause instead of only reporting EPERM; keep the error identity.
++        if (options.describeHolders !== undefined && error instanceof Error) {
++          const holders = await options.describeHolders(from).catch((reason: unknown) => (
++            `holder lookup failed: ${reason instanceof Error ? reason.message : String(reason)}`))
++          error.message = `${error.message}; still in use after ${String(attempt)} retries by: ${holders}`
++        }
++        throw error
++      }
 +      await sleep(delay)
 +    }
 +  }
@@ -915,7 +940,7 @@ index b9b94f7..3048a93 100644
  
  function copyMetadata(source: string, target: string): void {
    mkdirSync(target, { recursive: true, mode: 0o700 })
-@@ -264,9 +318,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
+@@ -264,9 +336,9 @@ function projectManifest(projectDir: string): DesktopProjectManifest {
    const packageSet = readDesktopCorePackageSet(projectDir, releaseFile(projectDir).version)
    const expectedOverrides = desktopCorePackageOverrides(packageSet)
    if (manifest.dependencies[DSH_PACKAGE] !== desktopDshPackageSpec(packageSet)
@@ -926,7 +951,7 @@ index b9b94f7..3048a93 100644
    }
    return manifest
  }
-@@ -284,9 +338,87 @@ function profilePluginNames(projectDir: string): readonly string[] {
+@@ -284,9 +356,87 @@ function profilePluginNames(projectDir: string): readonly string[] {
    return plugins
  }
  
@@ -1015,10 +1040,130 @@ index b9b94f7..3048a93 100644
  
  function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
    const manifest = projectManifest(projectDir)
-@@ -338,9 +470,9 @@ export class DesktopProjectManager {
+@@ -325,8 +475,49 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
+   return { name: requestedName, version: manifest.version }
+ }
+ 
+ /** Transactional desktop npm project manager. */
++/** Optional platform collaborators, injected by tests. */
++export interface DesktopProjectManagerOptions {
++  readonly platform?: NodeJS.Platform
++  readonly ownedProcesses?: OwnedDirectoryProcessQuery
++  /** Directory rename used for profile activation; tests inject sharing failures. */
++  readonly rename?: (from: string, to: string) => void
++  /** Backoff override for tests. */
++  readonly renameDelays?: readonly number[]
++}
++
++/** Windows STATUS_STACK_BUFFER_OVERRUN: a native fail-fast abort that prints nothing. */
++const NATIVE_FAIL_FAST_STATUSES: ReadonlySet<string> = new Set(['3221226505', '-1073740791'])
++
++/** Only commands that reproduce the same result from the same frozen inputs may repeat. */
++export function isIdempotentPnpmCommand(args: readonly string[]): boolean {
++  const [command] = args
++  if (command === 'fetch') return true
++  return command === 'install' && args.includes('--frozen-lockfile')
++}
++
++/**
++ * Repeat one idempotent frozen pnpm command once after a native fail-fast exit
++ * (0xC0000409), observed on hosted Windows with identical inputs succeeding on
++ * the next run. Any other failure, or a second crash, propagates unchanged in kind.
++ */
++export async function retryNativeFailFast(args: readonly string[], run: () => Promise<string>,
++  warn: (message: string) => void = (message) => { console.warn(message) }): Promise<string> {
++  try {
++    return await run()
++  } catch (error) {
++    if (!(error instanceof PnpmCommandError) || !NATIVE_FAIL_FAST_STATUSES.has(error.status) || !isIdempotentPnpmCommand(args)) throw error
++    warn(`desktop project: pnpm ${String(args[0])} ended with native fail-fast 0xC0000409; repeating once with the same frozen inputs`)
++    try {
++      return await run()
++    } catch (retryError) {
++      if (retryError instanceof Error) retryError.message = `${retryError.message} (after one repeat of a native fail-fast 0xC0000409 exit)`
++      throw retryError
++    }
++  }
++}
++
+ export class DesktopProjectManager {
+   private lockDescriptor: number | undefined
+ 
+   /**
+@@ -335,12 +526,79 @@ export class DesktopProjectManager {
+    */
+   constructor(
+     readonly paths: DesktopPaths,
      readonly runtime: DesktopRuntimeExecutables,
++    private readonly options: DesktopProjectManagerOptions = {},
    ) {}
  
++  private get windows(): boolean {
++    return (this.options.platform ?? process.platform) === 'win32'
++  }
++
++  private get ownedProcesses(): OwnedDirectoryProcessQuery {
++    return this.options.ownedProcesses ?? queryWindowsOwnedDirectoryProcesses
++  }
++
++  private renameOptions(): TransientRenameOptions {
++    const injected: TransientRenameOptions = {
++      ...(this.options.rename === undefined ? {} : { rename: this.options.rename }),
++      ...(this.options.renameDelays === undefined ? {} : { delays: this.options.renameDelays }),
++    }
++    if (!this.windows) return injected
++    return {
++      ...injected,
++      platform: 'win32',
++      describeHolders: async (path) => describeOwnedDirectoryProcesses(await this.ownedProcesses(path, false)),
++    }
++  }
++
++  /**
++   * The staged health check starts a complete Host from the staging profile. Its
++   * plugins may start native helpers (for example the Codex ACP adapter and the
++   * App Server executable inside the staged node_modules). Windows cannot rename a
++   * directory while such an image or working directory is in use, and ending the
++   * Host does not end its descendants. Only processes whose executable or command
++   * line lies inside this transaction's random directory are ended.
++   */
++  /**
++   * Rename the staged profile into place. A helper can still be exiting, or the
++   * process table can miss it once, so a Windows sharing failure gets one more
++   * scoped cleanup and one more bounded retry before its holders are reported.
++   */
++  private async activateStaging(stagingProfile: string, renameOptions: TransientRenameOptions): Promise<void> {
++    try {
++      // Holders are reported only after the second scoped cleanup below.
++      const firstAttempt: TransientRenameOptions = {
++        ...(renameOptions.platform === undefined ? {} : { platform: renameOptions.platform }),
++        ...(renameOptions.rename === undefined ? {} : { rename: renameOptions.rename }),
++        ...(renameOptions.delays === undefined ? {} : { delays: renameOptions.delays }),
++      }
++      await renameWithTransientRetry(stagingProfile, this.paths.profile, firstAttempt)
++    } catch (error) {
++      const code = (error as NodeJS.ErrnoException | undefined)?.code
++      if (!this.windows || typeof code !== 'string' || !TRANSIENT_RENAME_CODES.has(code)) throw error
++      await this.releaseStagingProcesses(stagingProfile)
++      await renameWithTransientRetry(stagingProfile, this.paths.profile, renameOptions)
++    }
++  }
++
++  private async releaseStagingProcesses(stagingProfile: string): Promise<void> {
++    if (!this.windows) return
++    const transaction = dirname(stagingProfile)
++    if (!isOwnedTransactionDirectory(transaction)) return
++    try {
++      const ended = await this.ownedProcesses(transaction, true)
++      if (ended.length > 0) {
++        console.warn(`desktop project: ended processes left in the staged profile: ${describeOwnedDirectoryProcesses(ended)}`)
++      }
++    } catch (error) {
++      // Diagnostics only: activation still retries and then names any holder.
++      console.warn(`desktop project: staged process cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
++    }
++  }
++
    /** Recover an interrupted directory replacement before reading the active project. */
 -  recover(): void {
 +  async recover(): Promise<void> {
@@ -1026,13 +1171,13 @@ index b9b94f7..3048a93 100644
      const value = readJson(this.paths.pending)
      if (!isRecord(value) || value.schemaVersion !== 1
        || typeof value.id !== 'string' || typeof value.stagingProfile !== 'string'
-@@ -355,11 +487,11 @@ export class DesktopProjectManager {
+@@ -355,11 +613,11 @@ export class DesktopProjectManager {
        step: value.step,
      }
      if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
        mkdirSync(dirname(this.paths.profile), { recursive: true })
 -      renameSync(this.paths.rollback, this.paths.profile)
-+      await renameWithTransientRetry(this.paths.rollback, this.paths.profile)
++      await renameWithTransientRetry(this.paths.rollback, this.paths.profile, this.renameOptions())
      }
 -    removeOwnedDirectory(pending.stagingProfile)
 +    await removeOwnedDirectory(pending.stagingProfile)
@@ -1040,7 +1185,7 @@ index b9b94f7..3048a93 100644
    }
  
    /** Read the active desktop plugin inventory. */
-@@ -386,71 +518,162 @@ export class DesktopProjectManager {
+@@ -386,71 +644,162 @@ export class DesktopProjectManager {
  
    /** Read the release version applied to the active desktop project. */
    releaseVersion(): string {
@@ -1221,7 +1366,7 @@ index b9b94f7..3048a93 100644
        }
      })
    }
-@@ -460,14 +683,52 @@ export class DesktopProjectManager {
+@@ -460,14 +809,52 @@ export class DesktopProjectManager {
      mkdirSync(path, { recursive: true, mode: 0o700 })
      return path
    }
@@ -1275,7 +1420,7 @@ index b9b94f7..3048a93 100644
          const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
          writeProfilePlugins(
            projectDir,
-@@ -480,9 +741,9 @@ export class DesktopProjectManager {
+@@ -480,9 +867,9 @@ export class DesktopProjectManager {
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
@@ -1286,7 +1431,7 @@ index b9b94f7..3048a93 100644
          return
        }
        case 'plugin-update':
-@@ -490,9 +751,9 @@ export class DesktopProjectManager {
+@@ -490,9 +877,9 @@ export class DesktopProjectManager {
          assertVersion(mutation.version)
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
@@ -1297,7 +1442,7 @@ index b9b94f7..3048a93 100644
            const installed = inspectPlugin(projectDir, mutation.name)
            writeProfilePlugins(
              projectDir,
-@@ -504,16 +765,24 @@ export class DesktopProjectManager {
+@@ -504,16 +891,24 @@ export class DesktopProjectManager {
          mutation satisfies never
      }
    }
@@ -1326,26 +1471,28 @@ index b9b94f7..3048a93 100644
    }
  
    private async activate(stagingProfile: string, hooks: DesktopProjectHooks): Promise<void> {
-@@ -525,31 +794,33 @@ export class DesktopProjectManager {
+@@ -525,31 +920,39 @@ export class DesktopProjectManager {
      }
      writeJson(this.paths.pending, pending)
      await hooks.beforeActivate()
      let activeMoved = false
 +    let stagingActivated = false
++    const renameOptions = this.renameOptions()
      try {
 -      removeOwnedDirectory(this.paths.rollback)
++      await this.releaseStagingProcesses(stagingProfile)
 +      await removeOwnedDirectory(this.paths.rollback)
        mkdirSync(dirname(this.paths.rollback), { recursive: true, mode: 0o700 })
        writeJson(this.paths.pending, { ...pending, step: 'active-moved' } satisfies DesktopPendingTransaction)
        if (existsSync(this.paths.profile)) {
 -        renameSync(this.paths.profile, this.paths.rollback)
-+        await renameWithTransientRetry(this.paths.profile, this.paths.rollback)
++        await renameWithTransientRetry(this.paths.profile, this.paths.rollback, renameOptions)
          activeMoved = true
        }
        mkdirSync(dirname(this.paths.profile), { recursive: true, mode: 0o700 })
        writeJson(this.paths.pending, { ...pending, step: 'staging-activated' } satisfies DesktopPendingTransaction)
 -      renameSync(stagingProfile, this.paths.profile)
-+      await renameWithTransientRetry(stagingProfile, this.paths.profile)
++      await this.activateStaging(stagingProfile, renameOptions)
 +      stagingActivated = true
        await hooks.afterActivate()
        unlinkSync(this.paths.pending)
@@ -1353,7 +1500,7 @@ index b9b94f7..3048a93 100644
 -      if (existsSync(this.paths.profile)) removeOwnedDirectory(this.paths.profile)
 -      if (activeMoved && existsSync(this.paths.rollback)) renameSync(this.paths.rollback, this.paths.profile)
 +      if (stagingActivated && existsSync(this.paths.profile)) await removeOwnedDirectory(this.paths.profile)
-+      if (activeMoved && existsSync(this.paths.rollback)) await renameWithTransientRetry(this.paths.rollback, this.paths.profile)
++      if (activeMoved && existsSync(this.paths.rollback)) await renameWithTransientRetry(this.paths.rollback, this.paths.profile, renameOptions)
        if (existsSync(this.paths.pending)) unlinkSync(this.paths.pending)
        await hooks.afterActivate().catch(() => undefined)
        throw error
@@ -1362,11 +1509,15 @@ index b9b94f7..3048a93 100644
  
 -  private async runPnpm(projectDir: string, args: readonly string[]): Promise<void> {
 +  private async runPnpm(projectDir: string, args: readonly string[]): Promise<string> {
++    return retryNativeFailFast(args, () => this.runPnpmOnce(projectDir, args))
++  }
++
++  private async runPnpmOnce(projectDir: string, args: readonly string[]): Promise<string> {
      const [command, ...commandArgs] = args
      if (command === undefined) throw new Error('desktop project: pnpm command is required')
      for (const path of [this.paths.root, this.paths.pnpm.store, this.paths.pnpm.cache,
        this.paths.pnpm.state, this.paths.pnpm.config, this.paths.pnpm.home]) {
-@@ -559,9 +830,9 @@ export class DesktopProjectManager {
+@@ -559,9 +962,9 @@ export class DesktopProjectManager {
      if (!existsSync(npmrc)) writeFileSync(npmrc, '', { mode: 0o600 })
      const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
        !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
@@ -1377,7 +1528,7 @@ index b9b94f7..3048a93 100644
          this.runtime.pnpm,
          `--config.registry=${DESKTOP_REGISTRY}`,
          `--config.store-dir=${this.paths.pnpm.store}`,
-@@ -570,10 +841,14 @@ export class DesktopProjectManager {
+@@ -570,10 +973,14 @@ export class DesktopProjectManager {
          command,
          ...commandArgs,
        ], {
@@ -1392,7 +1543,7 @@ index b9b94f7..3048a93 100644
            NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
            NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
            NPM_CONFIG_USERCONFIG: npmrc,
-@@ -598,14 +873,16 @@ export class DesktopProjectManager {
+@@ -598,14 +1005,16 @@ export class DesktopProjectManager {
          reject(errorOf(error, 'desktop project: failed to assign the package transaction lock to pnpm'))
          return
        }
@@ -1409,7 +1560,7 @@ index b9b94f7..3048a93 100644
        child.stderr.on('data', appendDiagnostics)
        const complete = (settleChild: () => void): void => {
          if (completed) return
-@@ -621,14 +898,12 @@ export class DesktopProjectManager {
+@@ -621,14 +1030,12 @@ export class DesktopProjectManager {
        child.once('error', (error) => { complete(() => { reject(error) }) })
        child.once('close', (code, signal) => {
          complete(() => {
@@ -1426,7 +1577,7 @@ index b9b94f7..3048a93 100644
        })
      })
    }
-@@ -689,15 +964,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
+@@ -689,15 +1096,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
    const manifest: DesktopProjectManifest = {
      name: PROJECT_NAME,
      private: true,
@@ -1671,6 +1822,109 @@ index e4b4759..bce8158 100644
      })
    }
  }
+diff --git a/apps/desktop/src/staging-processes.ts b/apps/desktop/src/staging-processes.ts
+new file mode 100644
+index 0000000..f765170
+--- /dev/null
++++ b/apps/desktop/src/staging-processes.ts
+@@ -0,0 +1,97 @@
++import { execFile } from 'node:child_process'
++import { basename, resolve } from 'node:path'
++
++/** A Windows process whose executable or command line lies inside one transaction directory. */
++export interface OwnedDirectoryProcess {
++  readonly pid: number
++  readonly name: string
++  readonly executablePath: string | null
++}
++
++/** Lists (and optionally terminates) processes that use one owned directory. */
++export type OwnedDirectoryProcessQuery = (directory: string, terminate: boolean) => Promise<readonly OwnedDirectoryProcess[]>
++
++// The directory arrives through the environment so this PowerShell's own command
++// line never matches it. Only an exact, case-insensitive path prefix of the
++// executable or a command line naming the directory is selected; image names,
++// parents and other installations are never used as a criterion.
++const QUERY_SCRIPT = String.raw`
++$ErrorActionPreference = 'Stop'
++# Windows PowerShell's GetFullPath expands 8.3 names (RUNNER~1 -> runneradmin),
++# while processes keep the spelling they were started with. Match both forms.
++$given = $env:AGENTROUTER_OWNED_DIRECTORY.Replace('/', '\').TrimEnd('\')
++$directories = @($given, [IO.Path]::GetFullPath($given).TrimEnd('\')) | Select-Object -Unique
++$self = $PID
++function Test-Inside([string]$text, [bool]$prefixOnly) {
++  if (!$text) { return $false }
++  $candidate = $text.Replace('/', '\')
++  foreach ($directory in $directories) {
++    if ($prefixOnly) {
++      if ($candidate.StartsWith($directory + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
++    } elseif ($candidate.IndexOf($directory, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
++  }
++  if ($prefixOnly) {
++    try { $long = [IO.Path]::GetFullPath($candidate) } catch { return $false }
++    foreach ($directory in $directories) {
++      if ($long.StartsWith($directory + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
++    }
++  }
++  return $false
++}
++function Select-Owned {
++  @(Get-CimInstance Win32_Process | Where-Object {
++    $_.ProcessId -ne $self -and ((Test-Inside $_.ExecutablePath $true) -or (Test-Inside $_.CommandLine $false))
++  })
++}
++$found = @(Select-Owned)
++if ($env:AGENTROUTER_OWNED_TERMINATE -eq '1' -and $found.Count -gt 0) {
++  foreach ($process in $found) { try { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop } catch { } }
++  $deadline = [DateTime]::UtcNow.AddSeconds(5)
++  while ([DateTime]::UtcNow -lt $deadline -and @(Select-Owned).Count -gt 0) { Start-Sleep -Milliseconds 200 }
++}
++ConvertTo-Json -Compress -InputObject @($found | ForEach-Object {
++  @{ pid = [int]$_.ProcessId; name = [string]$_.Name; executablePath = $_.ExecutablePath }
++})
++`
++
++/** Query the real Windows process table. Callers pass only directories they exclusively own. */
++export const queryWindowsOwnedDirectoryProcesses: OwnedDirectoryProcessQuery = (directory, terminate) => (
++  new Promise((settle, reject) => {
++    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', QUERY_SCRIPT], {
++      env: { ...process.env, AGENTROUTER_OWNED_DIRECTORY: resolve(directory), AGENTROUTER_OWNED_TERMINATE: terminate ? '1' : '0' },
++      windowsHide: true,
++      timeout: 30_000,
++      maxBuffer: 1024 * 1024,
++    }, (error, stdout) => {
++      if (error) {
++        reject(error)
++        return
++      }
++      try {
++        const text = stdout.trim()
++        const parsed: unknown = text === '' ? [] : JSON.parse(text)
++        const rows = Array.isArray(parsed) ? parsed : [parsed]
++        settle(rows.filter((row): row is OwnedDirectoryProcess => typeof row === 'object' && row !== null
++          && Number.isSafeInteger((row as OwnedDirectoryProcess).pid) && typeof (row as OwnedDirectoryProcess).name === 'string'))
++      } catch (parseError) {
++        reject(parseError instanceof Error ? parseError : new Error('owned directory process query returned invalid JSON'))
++      }
++    })
++  })
++)
++
++/** Human-readable process list for an error message; never includes command lines. */
++export function describeOwnedDirectoryProcesses(processes: readonly OwnedDirectoryProcess[]): string {
++  if (processes.length === 0) return 'no process found by executable path or command line'
++  return processes.map(entry => `${entry.name} (PID ${String(entry.pid)}${entry.executablePath ? `, ${entry.executablePath}` : ''})`).join('; ')
++}
++
++const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
++
++/**
++ * A staged profile lives at <staging>/<random UUID>/profile. Only such a
++ * transaction directory may have its leftover processes terminated.
++ */
++export function isOwnedTransactionDirectory(directory: string): boolean {
++  return UUID_PATTERN.test(basename(resolve(directory)))
++}
 diff --git a/apps/desktop/src/update-coordinator.ts b/apps/desktop/src/update-coordinator.ts
 index c31dcc3..706bf03 100644
 --- a/apps/desktop/src/update-coordinator.ts
@@ -1944,20 +2198,32 @@ index d3a08d7..fdc9cc1 100644
  const bodies = new Map()
  process.send({ type: 'ready', protocolVersion: 3, dshVersion: process.env.NODE_OPTIONS ?? 'clean' })
 diff --git a/apps/desktop/tests/project-manager.spec.ts b/apps/desktop/tests/project-manager.spec.ts
-index 27ac24f..7b60daf 100644
+index 27ac24f..0188e95 100644
 --- a/apps/desktop/tests/project-manager.spec.ts
 +++ b/apps/desktop/tests/project-manager.spec.ts
-@@ -8,8 +8,9 @@ import { resolveDesktopPaths } from '../src/paths.ts'
+@@ -7,16 +7,21 @@ import { afterEach, describe, expect, it } from 'vitest'
+ import { resolveDesktopPaths } from '../src/paths.ts'
  import {
    createSeedMetadata,
    DesktopProjectManager,
++  isIdempotentPnpmCommand,
    packageNameFromSpec,
++  PnpmCommandError,
 +  renameWithTransientRetry,
++  retryNativeFailFast,
    verifySeedIntegrity,
    type DesktopProjectHooks,
  } from '../src/project-manager.ts'
  import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
-@@ -84,12 +85,14 @@ function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): v
+ import { DESKTOP_PACKAGES_DIR, DESKTOP_PACKAGE_SET_FILE } from '../src/core-package-set.ts'
+ import type { DesktopRelease } from '../src/release.ts'
+ import { archivePnpmStore } from '../src/seed-store.ts'
++import { describeOwnedDirectoryProcesses, isOwnedTransactionDirectory } from '../src/staging-processes.ts'
+ 
+ const roots: string[] = []
+ const releaseWorkers: Array<() => Promise<void>> = []
+ 
+@@ -84,12 +89,14 @@ function createTestSeedMetadata(seed: string, desktopRelease: DesktopRelease): v
  
  function writeFakePnpm(root: string): string {
    const path = join(root, 'pnpm.mjs')
@@ -1973,7 +2239,7 @@ index 27ac24f..7b60daf 100644
  const manifestPath = join(project, 'package.json')
  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
  const packageName = spec => spec.startsWith('@')
-@@ -125,9 +128,14 @@ for (const [name, version] of Object.entries(manifest.dependencies)) {
+@@ -125,9 +132,14 @@ for (const [name, version] of Object.entries(manifest.dependencies)) {
      writeFileSync(join(packageRoot, 'lib', 'index.js'), '')
    }
  }
@@ -1989,7 +2255,7 @@ index 27ac24f..7b60daf 100644
    return path
  }
  
-@@ -172,8 +180,187 @@ afterEach(async () => {
+@@ -172,8 +184,187 @@ afterEach(async () => {
    if (failures.length > 0) throw new AggregateError(failures, 'desktop worker cleanup failed')
  })
  
@@ -2177,7 +2443,7 @@ index 27ac24f..7b60daf 100644
      expect(packageNameFromSpec('@scope/plugin@1.2.3')).toBe('@scope/plugin')
      expect(packageNameFromSpec('plugin@next')).toBe('plugin')
      expect(() => packageNameFromSpec('file:../plugin')).toThrow(/unsupported npm package spec/u)
-@@ -192,8 +379,146 @@ describe('desktop package policy', () => {
+@@ -192,8 +383,146 @@ describe('desktop package policy', () => {
    })
  })
  
@@ -2324,7 +2590,7 @@ index 27ac24f..7b60daf 100644
      const root = temporaryRoot()
      const seed = join(root, 'seed')
      const log = join(root, 'pnpm-log.json')
-@@ -291,9 +616,9 @@ describe('desktop project transactions', () => {
+@@ -291,9 +620,9 @@ describe('desktop project transactions', () => {
        stagingProfile,
        step: 'prepared',
      })}\n`)
@@ -2335,7 +2601,7 @@ index 27ac24f..7b60daf 100644
      expect(manager.listPlugins()).toEqual([{ name: '@scope/plugin', version: '2.0.0' }])
      expect(existsSync(stagingProfile)).toBe(false)
      expect(existsSync(paths.pending)).toBe(false)
-@@ -361,12 +686,13 @@ describe('desktop project transactions', () => {
+@@ -361,12 +690,13 @@ describe('desktop project transactions', () => {
      expect(coreSpec).toMatch(/^file:\.\/desktop-packages\//u)
      expect(readFileSync(join(paths.profile, 'pnpm-workspace.yaml'), 'utf8'))
        .toContain(`${JSON.stringify('@deepseek-ai/dsh')}: ${JSON.stringify(coreSpec)}`)
@@ -2353,7 +2619,7 @@ index 27ac24f..7b60daf 100644
    })
  
    it('reconciles dsh to the packaged release without removing desktop plugins', async () => {
-@@ -407,4 +733,67 @@ describe('desktop project transactions', () => {
+@@ -407,4 +737,174 @@ describe('desktop project transactions', () => {
      expect(readFileSync(join(paths.pnpm.store, 'release-2'), 'utf8')).toBe('two')
      await expect(manager.applyRelease(nextSeed, '1.1.0', hooks())).resolves.toBe(false)
    })
@@ -2419,6 +2685,113 @@ index 27ac24f..7b60daf 100644
 +      expect(attempts).toBe(1)
 +      expect(waits).toEqual([])
 +    }
++  })
++
++  it('names the processes still holding the directory after the budget, keeping the error', async () => {
++    const persistent = sharingError('EPERM')
++    const described: string[] = []
++    await expect(renameWithTransientRetry('staged', 'active', {
++      platform: 'win32',
++      sleep: async () => {},
++      rename: () => { throw persistent },
++      describeHolders: async (path) => {
++        described.push(path)
++        return describeOwnedDirectoryProcesses([{ pid: 42, name: 'codex.exe', executablePath: 'C:\staged\node_modules\codex.exe' }])
++      },
++    })).rejects.toBe(persistent)
++    expect(described).toEqual(['staged'])
++    expect(persistent.message).toContain('still in use after 6 retries by: codex.exe (PID 42, C:\staged\node_modules\codex.exe)')
++  })
++
++  it('ends leftover staged processes before activation on Windows, only for its transaction directory', async () => {
++    const root = temporaryRoot()
++    const paths = resolveDesktopPaths(join(root, 'home'))
++    const seed = join(root, 'seed')
++    createTestSeedMetadata(seed, release())
++    archiveStore(seed); writeIntegrity(seed)
++    const calls: Array<{ directory: string, terminate: boolean }> = []
++    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) }, {
++      platform: 'win32',
++      ownedProcesses: async (directory, terminate) => {
++        calls.push({ directory, terminate })
++        return terminate ? [{ pid: 7, name: 'codex.exe', executablePath: join(directory, 'profile', 'codex.exe') }] : []
++      },
++    })
++    await manager.applyRelease(seed, '1.0.0', hooks())
++    expect(existsSync(join(paths.profile, 'package.json'))).toBe(true)
++    expect(calls).toHaveLength(1)
++    expect(calls[0]!.terminate).toBe(true)
++    expect(dirname(calls[0]!.directory)).toBe(paths.staging)
++    expect(isOwnedTransactionDirectory(calls[0]!.directory)).toBe(true)
++  })
++
++  it('cleans the staged transaction again when its rename is still refused, then activates', async () => {
++    const root = temporaryRoot()
++    const paths = resolveDesktopPaths(join(root, 'home'))
++    const seed = join(root, 'seed')
++    createTestSeedMetadata(seed, release())
++    archiveStore(seed); writeIntegrity(seed)
++    let terminations = 0
++    let released = false
++    const manager = new DesktopProjectManager(paths, { node: process.execPath, pnpm: writeFakePnpm(root) }, {
++      platform: 'win32',
++      ownedProcesses: async (_directory, terminate) => {
++        if (terminate) {
++          terminations += 1
++          // The first scoped cleanup misses the holder; the second releases it.
++          if (terminations === 2) released = true
++        }
++        return []
++      },
++      renameDelays: [1, 1],
++      rename: (from, to) => {
++        if (!released && from.includes(`${sep}staging${sep}`)) throw Object.assign(new Error('EPERM: rename'), { code: 'EPERM' })
++        renameSync(from, to)
++      },
++    })
++    await manager.applyRelease(seed, '1.0.0', hooks())
++    expect(terminations).toBe(2)
++    expect(existsSync(join(paths.profile, 'package.json'))).toBe(true)
++  }, 30_000)
++
++  it('never selects a directory that is not a random transaction directory', () => {
++    expect(isOwnedTransactionDirectory(join('staging', '3097596f-05ab-4093-a9b8-42b733e79ae9'))).toBe(true)
++    for (const path of [join('home', 'profiles', 'desktop'), join('staging', 'profile'), join('3097596f-05ab-4093-a9b8-42b733e79ae9', 'profile')]) {
++      expect(isOwnedTransactionDirectory(path)).toBe(false)
++    }
++  })
++})
++
++describe('pnpm native fail-fast repeat', () => {
++  const crash = (): PnpmCommandError => new PnpmCommandError('3221226505', '')
++
++  it('repeats an idempotent frozen command once after 0xC0000409 and records it', async () => {
++    const warnings: string[] = []
++    let runs = 0
++    await expect(retryNativeFailFast(['install', '--frozen-lockfile', '--offline'], async () => {
++      runs += 1
++      if (runs === 1) throw crash()
++      return 'done'
++    }, message => { warnings.push(message) })).resolves.toBe('done')
++    expect(runs).toBe(2)
++    expect(warnings).toHaveLength(1)
++    expect(warnings[0]).toContain('0xC0000409')
++  })
++
++  it('does not repeat mutations, other failures or a second crash', async () => {
++    for (const args of [['add', '@fixture/a@1.0.0', '--lockfile-only'], ['remove', '@fixture/a'], ['install']]) {
++      let runs = 0
++      await expect(retryNativeFailFast(args, async () => { runs += 1; throw crash() }, () => {})).rejects.toBeInstanceOf(PnpmCommandError)
++      expect(runs).toBe(1)
++    }
++    let runs = 0
++    await expect(retryNativeFailFast(['fetch'], async () => { runs += 1; throw new PnpmCommandError('1', 'ERR_PNPM_TARBALL_INTEGRITY') }, () => {})).rejects.toThrow('exited with 1')
++    expect(runs).toBe(1)
++    runs = 0
++    await expect(retryNativeFailFast(['fetch'], async () => { runs += 1; throw crash() }, () => {})).rejects.toThrow('after one repeat of a native fail-fast 0xC0000409 exit')
++    expect(runs).toBe(2)
++    expect(isIdempotentPnpmCommand(['install', '--frozen-lockfile'])).toBe(true)
++    expect(isIdempotentPnpmCommand(['install', '--lockfile-only'])).toBe(false)
 +  })
 +})
 diff --git a/apps/desktop/tests/seed-store.spec.ts b/apps/desktop/tests/seed-store.spec.ts
@@ -2557,6 +2930,82 @@ index e0e7d14..8ad9888 100644
 +    expect(readdirSync(extracted)).toEqual([])
    })
  })
+diff --git a/apps/desktop/tests/staging-processes.spec.ts b/apps/desktop/tests/staging-processes.spec.ts
+new file mode 100644
+index 0000000..f5d6a47
+--- /dev/null
++++ b/apps/desktop/tests/staging-processes.spec.ts
+@@ -0,0 +1,70 @@
++import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
++import { randomUUID } from 'node:crypto'
++import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { afterEach, describe, expect, it } from 'vitest'
++import { queryWindowsOwnedDirectoryProcesses } from '../src/staging-processes.ts'
++
++const children: ChildProcess[] = []
++const roots: string[] = []
++afterEach(async () => {
++  await Promise.all(children.splice(0).map(child => new Promise<void>((resolve) => {
++    if (child.exitCode !== null || child.signalCode !== null) { resolve(); return }
++    child.once('exit', () => { resolve() })
++    child.kill('SIGKILL')
++  })))
++  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
++})
++
++async function holder(script: string, cwd: string): Promise<ChildProcess> {
++  const child = spawn(process.execPath, [script], { cwd, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
++  children.push(child)
++  await new Promise<void>((resolve, reject) => {
++    child.once('error', reject)
++    child.stdout!.once('data', () => { resolve() })
++  })
++  return child
++}
++
++describe.runIf(process.platform === 'win32')('Windows staged process cleanup', () => {
++  it('ends only the process that keeps a file open inside the transaction, then the directory renames', async () => {
++    const root = mkdtempSync(join(tmpdir(), 'agentrouter-staging-'))
++    roots.push(root)
++    const transaction = join(root, randomUUID())
++    const profile = join(transaction, 'profile')
++    mkdirSync(join(profile, 'node_modules'), { recursive: true })
++    const held = join(profile, 'node_modules', 'held.bin')
++    writeFileSync(held, 'native helper image stand-in')
++    // A leftover helper started from the staged profile inherits it as working
++    // directory (as Host descendants do) and keeps one of its files open.
++    const leftover = join(profile, 'node_modules', 'leftover.cjs')
++    writeFileSync(leftover, `require('node:fs').openSync(${JSON.stringify(held)}, 'r'); console.log('ready'); setInterval(() => {}, 1000)`)
++    // An unrelated process with the same image and a similar, but different, path survives.
++    const unrelatedDirectory = join(root, `${randomUUID()}-other`)
++    mkdirSync(unrelatedDirectory)
++    const unrelatedScript = join(unrelatedDirectory, 'unrelated.cjs')
++    writeFileSync(unrelatedScript, `console.log('ready'); setInterval(() => {}, 1000)`)
++    const staged = await holder(leftover, profile)
++    const unrelated = await holder(unrelatedScript, unrelatedDirectory)
++
++    const listed = await queryWindowsOwnedDirectoryProcesses(transaction, false)
++    expect(listed.map(entry => entry.pid)).toEqual([staged.pid])
++    expect(() => { renameSync(profile, join(root, 'activated')) }).toThrow(/EPERM|EBUSY|EACCES/u)
++
++    const ended = await queryWindowsOwnedDirectoryProcesses(transaction, true)
++    if (ended.length !== 1 || ended[0]!.pid !== staged.pid) {
++      // Name what the process table held so a failure identifies its cause.
++      const raw = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
++        `Get-CimInstance Win32_Process -Filter "ProcessId=${String(staged.pid)}" | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress`],
++      { encoding: 'utf8', windowsHide: true })
++      throw new Error(`terminate query returned ${JSON.stringify(ended)}; staged exit=${String(staged.exitCode)} signal=${String(staged.signalCode)}; `
++        + `listing now ${JSON.stringify(await queryWindowsOwnedDirectoryProcesses(transaction, false))}; transaction ${transaction}; process ${raw.trim()}`)
++    }
++    await new Promise<void>((resolve) => { if (staged.exitCode !== null || staged.signalCode !== null) resolve(); else staged.once('exit', () => { resolve() }) })
++    expect(unrelated.exitCode).toBeNull()
++    renameSync(profile, join(root, 'activated'))
++    expect(existsSync(join(root, 'activated', 'node_modules', 'held.bin'))).toBe(true)
++    expect(await queryWindowsOwnedDirectoryProcesses(transaction, false)).toEqual([])
++  }, 60_000)
++})
 diff --git a/apps/desktop/tests/update-coordinator.spec.ts b/apps/desktop/tests/update-coordinator.spec.ts
 index 272ef03..8750146 100644
 --- a/apps/desktop/tests/update-coordinator.spec.ts

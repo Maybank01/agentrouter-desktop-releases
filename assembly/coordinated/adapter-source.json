@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "repository": "Maybank01/agentrouter-desktop",
   "sourceDirectory": "assembly/coordinated",
-  "commit": "10f6af02917dd043683847b079e124f282c449f9",
+  "commit": "580fc2c98e79f69ae243a8565d3a49bb6802545e",
   "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
-      "bytes": 40100,
-      "sha256": "106fb8cf0e677a54875940169269557da637fef104b8286438676c81b64bfefa"
+      "bytes": 40720,
+      "sha256": "e24bca0f2ebeafd4519ecba49aa4399e0fdf96eecedfb5e2ceb5e693f0350a96"
     },
     {
       "path": "agentrouter-icon.svg",
@@ -32,8 +32,8 @@
     },
     {
       "path": "coordinated-delivery.patch",
-      "bytes": 138587,
-      "sha256": "f7be820267ff169b67905331432821757e018626976d443216d56708206f5b20"
+      "bytes": 161112,
+      "sha256": "9394ec3117713269713b8260620c54005fa76a32e21b4665faddce38a722b871"
     },
     {
       "path": "installer-acceptance.mjs",
@@ -92,8 +92,8 @@
     },
     {
       "path": "vitest.config.mjs",
-      "bytes": 219,
-      "sha256": "675cebd8c8a790fe56df8c4aa37ffe8cc0558610b6660f47aba809c37e9b9624"
+      "bytes": 237,
+      "sha256": "348791fb862e0b95dba26058045ca473bd6e911a27018578eff234c6071e2dec"
     },
     {
       "path": "update-signature.mjs",
