@@ -6,7 +6,7 @@ import { createServer } from 'node:http'
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { load, dump } from 'js-yaml'
 import { _electron, expect } from '@playwright/test'
 import { directory, root } from './prepare.mjs'
@@ -78,6 +78,38 @@ await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${gateway.address().port}`
 let app, page
 const launches = []
+let workspaceUiPath = false
+/**
+ * A real user must be able to get a usable composer and pick a workspace through
+ * the UI (3.0.18 "keeps asking to choose a workspace"): a fresh profile opens the
+ * plugin's default workspace, and the hero chip -> 添加工作区… -> native Win32
+ * folder dialog -> 选择文件夹 path must select the new folder.
+ */
+const assertWorkspaceUiPath = async page => {
+  const chip = page.getByRole('button', { name: '选择工作区', exact: true })
+  let marker
+  try { marker = json(join(home, 'agentrouter/default-workspace.json')) } catch {}
+  if (marker?.outcome === 'created') await expect(chip).toContainText('AgentRouter', { timeout: 30000 })
+  const folder = join(state, `界面选择-${randomUUID().slice(0, 8)}`)
+  mkdirSync(folder, { recursive: true })
+  // First-run notices (plugin welcome, login, notifications) can open after the
+  // page is ready; a real user closes them before reaching the composer.
+  await expect(async () => {
+    for (const name of ['继续', '稍后登录，关闭引导', '稍后配置', '下次再说']) {
+      const button = page.getByRole('button', { name, exact: true }).first()
+      if (await button.isVisible().catch(() => false)) await button.click({ timeout: 3000 }).catch(() => {})
+    }
+    await chip.click({ timeout: 3000 })
+  }).toPass({ timeout: 60000, intervals: [500, 1000] })
+  const add = page.getByRole('menuitem', { name: /^添加工作区/ })
+  if (await add.waitFor({ timeout: 5000 }).then(() => true, () => false)) await add.click()
+  const answer = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+    join(directory, 'workspace-picker-acceptance.ps1'), '-Folder', folder], { windowsHide: true, timeout: 90000, encoding: 'utf8' })
+  await expect(chip).toContainText(basename(folder), { timeout: 30000 })
+  await expect(page.getByText('选择一个工作区开始', { exact: true })).toHaveCount(0)
+  console.log(JSON.stringify({ phase: 'workspace-ui-path', defaultWorkspace: marker?.outcome ?? 'absent', folder,
+    dialog: JSON.parse(answer.slice(answer.lastIndexOf('{'))).dialogProcess }))
+}
 const debuggerDetachWait = new WeakSet()
 let nativeUpdateMetrics
 let unrelatedProcess
@@ -172,6 +204,11 @@ const launch = async receipt => {
     const originalWindowTitle = await title()
     await page.evaluate(() => { document.title = 'Native appearance acceptance — DeepSeek Harness' })
     await expect.poll(title).toBe('Native appearance acceptance — AgentRouter')
+    if (!candidate || receipt === candidate) {
+      // Plugin 0.16.1+ already rewrites the page suffix to AgentRouter; the window keeps it.
+      await page.evaluate(() => { document.title = 'Product title acceptance — AgentRouter' })
+      await expect.poll(title).toBe('Product title acceptance — AgentRouter')
+    }
     await page.evaluate(value => { document.title = value }, originalTitle)
     await expect.poll(title).toBe(originalWindowTitle)
     if (process.platform === 'win32') {
@@ -202,6 +239,11 @@ const launch = async receipt => {
   if (!receipt.legacy && (!candidate || receipt === candidate)) {
     await assertExternalWebNavigation(app, page)
     externalBrowserNavigation = true
+    // Once per run: later relaunches (recovery, update) reopen the picked folder.
+    if (process.platform === 'win32' && !workspaceUiPath) {
+      await assertWorkspaceUiPath(page)
+      workspaceUiPath = true
+    }
   }
   console.log(JSON.stringify({ phase: 'ready', ...launches.at(-1) }))
 }
@@ -523,7 +565,7 @@ try {
     automaticInstallerRestart: nativeUpdate, publicFeedUpgrade: false, legacyProfileMigration: !!legacyExecutable,
     legacyFileTarballMigrated: !!legacyExecutable, legacyDanglingBundleReconciled: !!legacyExecutable }
   Object.assign(receipt, { thirdPartyPluginPreserved: !!legacyExecutable, staleRegistryMetadataRefreshed: staleRegistryMetadata,
-    nativeUpdateMetrics, externalBrowserNavigation, credentialRecovery, runtimeRecovery, launches })
+    nativeUpdateMetrics, externalBrowserNavigation, workspaceUiPath, credentialRecovery, runtimeRecovery, launches })
   writeFileSync(join(state, 'acceptance.json'), JSON.stringify(receipt, null, 2) + '\n')
   // Single-install scenarios also leave their evidence in the target's output.
   const evidence = (candidate ?? first).output
