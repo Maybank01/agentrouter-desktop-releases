@@ -50,7 +50,7 @@ test('the 3.0.19 release jobs breach their budgets where time was lost', () => {
     job('Install signed bytes on a clean worker', '04:13:27', '04:13:41', '04:17:59', 'failure'),
     { name: 'Accept coordinated installers before signing', conclusion: 'skipped', created_at: '2026-09-24T04:08:55Z', started_at: '2026-09-24T04:08:55Z', completed_at: '2026-09-24T04:08:54Z' },
   ]
-  const result = evaluateJobs(jobs, { profile: 'hotfix', dispatchedAt: '2026-09-24T04:08:28Z', finishedAt: '2026-09-24T04:33:37Z' })
+  const result = evaluateJobs(jobs, { profile: 'hotfix', dispatchedAt: '2026-09-24T04:08:28Z', finishedAt: '2026-09-24T04:44:37Z' }) // over the 35-minute hotfix total
   assert.deepEqual(result.failed, ['Install signed bytes on a clean worker'])
   assert.equal(result.stages.length, 5, 'skipped jobs are not stages')
   assert.ok(result.breaches.some(breach => breach.startsWith('total')))
