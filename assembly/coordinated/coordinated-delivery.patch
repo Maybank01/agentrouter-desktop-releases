@@ -360,15 +360,16 @@ index d057d6d..970a2b5 100644
    readonly dshVersion: string
  } | {
 diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
-index 8bc9fdc..9399933 100644
+index 8bc9fdc..469ca41 100644
 --- a/apps/desktop/src/main.ts
 +++ b/apps/desktop/src/main.ts
-@@ -1,16 +1,19 @@
+@@ -1,16 +1,21 @@
  /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
  
 -import { readFile, writeFile } from 'node:fs/promises'
 -import { extname, join, normalize, resolve, sep } from 'node:path'
-+import { readFileSync } from 'node:fs'
++import { spawn } from 'node:child_process'
++import { existsSync, readFileSync } from 'node:fs'
 +import { mkdir, readFile, writeFile } from 'node:fs/promises'
 +import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path'
  import { fileURLToPath } from 'node:url'
@@ -379,13 +380,14 @@ index 8bc9fdc..9399933 100644
    dialog,
    ipcMain,
    Menu,
++  net,
    protocol,
 +  shell,
    type IpcMainInvokeEvent,
  } from 'electron'
  import { resolveDesktopPaths } from './paths.ts'
  import { DesktopProjectManager, type DesktopProjectHooks } from './project-manager.ts'
-@@ -18,11 +21,19 @@ import { DesktopHostProcess } from './host-process.ts'
+@@ -18,11 +23,21 @@ import { DesktopHostProcess } from './host-process.ts'
  import { DESKTOP_IPC, type DesktopUpdateState } from './ipc.ts'
  import { formatDesktopMessage, resolveDesktopLocale } from './locale.ts'
  import { claimDesktopSingleInstance } from './single-instance.ts'
@@ -395,7 +397,9 @@ index 8bc9fdc..9399933 100644
 +import { inspectCredentialStartupFailure, backupInvalidCredentials, credentialRecoveryDialog } from './agentrouter-credential-recovery.mjs'
 +import { installExternalWebNavigation } from './agentrouter-external-navigation.mjs'
 +import { installUpdateExitHandler } from './agentrouter-update-exit.mjs'
-+import { verifyRuntimeExecutables, isRuntimeStartupFailure, runtimeRecoveryDialog, repairInstallerUrl, monitorStartupResponsiveness } from './agentrouter-runtime-recovery.mjs'
++import { verifyRuntimeExecutables, isRuntimeStartupFailure, runtimeRecoveryDialog, repairInstallerUrl, monitorStartupResponsiveness, prepareRepairInstaller } from './agentrouter-runtime-recovery.mjs'
++import { verifyUpdateManifest, verifyUpdateFile } from './agentrouter-update-signature.mjs'
++import { resumableDownload } from './agentrouter-update-transport.mjs'
 +import { prepareDownloadedRelease, runtimeChanged } from './agentrouter-update-runtime.mjs'
  
  const SCHEME = 'dsh-app'
@@ -405,7 +409,7 @@ index 8bc9fdc..9399933 100644
  function errorOf(reason: unknown, fallback: string): Error {
    return reason instanceof Error ? reason : new Error(fallback)
  }
-@@ -43,8 +54,9 @@ const MIME: Readonly<Record<string, string>> = {
+@@ -43,8 +58,9 @@ const MIME: Readonly<Record<string, string>> = {
    '.css': 'text/css; charset=utf-8',
    '.html': 'text/html; charset=utf-8',
    '.js': 'text/javascript; charset=utf-8',
@@ -415,7 +419,7 @@ index 8bc9fdc..9399933 100644
  
  interface RuntimeResources {
    readonly node: string
-@@ -78,10 +90,13 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
+@@ -78,10 +94,13 @@ function developmentHostInspectPort(enabled: boolean): number | undefined {
    }
    return port
  }
@@ -430,7 +434,7 @@ index 8bc9fdc..9399933 100644
      height: 840,
      minWidth: 880,
      minHeight: 600,
-@@ -93,11 +108,20 @@ function createWindow(preload: string): BrowserWindow {
+@@ -93,11 +112,20 @@ function createWindow(preload: string): BrowserWindow {
        sandbox: true,
        webSecurity: true,
      },
@@ -454,7 +458,7 @@ index 8bc9fdc..9399933 100644
    return window
  }
  
-@@ -130,15 +154,17 @@ async function serveShellAsset(request: Request): Promise<Response> {
+@@ -130,15 +158,17 @@ async function serveShellAsset(request: Request): Promise<Response> {
    }
  }
  
@@ -473,7 +477,7 @@ index 8bc9fdc..9399933 100644
    let mainWindow: BrowserWindow | undefined
    let pluginWindow: BrowserWindow | undefined
    let shellInstallerOwnsQuit = false
-@@ -146,20 +172,89 @@ async function main(): Promise<void> {
+@@ -146,20 +176,89 @@ async function main(): Promise<void> {
    const locale = resolveDesktopLocale(app.getLocale())
    const messages = locale.messages
    const appPreload = fileURLToPath(new URL('./preload-app.cjs', import.meta.url))
@@ -564,7 +568,7 @@ index 8bc9fdc..9399933 100644
    }
    const hooks: DesktopProjectHooks = {
      healthCheck: async (projectDir) => {
-@@ -201,36 +296,70 @@ async function main(): Promise<void> {
+@@ -201,36 +300,70 @@ async function main(): Promise<void> {
        host = await startHost()
      },
    }
@@ -648,7 +652,7 @@ index 8bc9fdc..9399933 100644
      assertDesktopSender(event, ['shell'])
      if (development !== undefined) {
        throw new Error('dsh desktop: plugin package changes require a packaged application')
-@@ -271,8 +400,9 @@ async function main(): Promise<void> {
+@@ -271,8 +404,9 @@ async function main(): Promise<void> {
    })
  
    const checkAndPrompt = async (manual: boolean): Promise<void> => {
@@ -658,7 +662,7 @@ index 8bc9fdc..9399933 100644
        if (manual) {
          await dialog.showMessageBox({
            type: 'error',
-@@ -281,9 +411,9 @@ async function main(): Promise<void> {
+@@ -281,9 +415,9 @@ async function main(): Promise<void> {
          })
        }
        return
@@ -669,7 +673,7 @@ index 8bc9fdc..9399933 100644
          await dialog.showMessageBox({
            type: 'info',
            title: messages.updateCheckTitle,
-@@ -301,26 +431,32 @@ async function main(): Promise<void> {
+@@ -301,26 +435,32 @@ async function main(): Promise<void> {
        defaultId: 0,
        cancelId: 1,
      })
@@ -707,7 +711,7 @@ index 8bc9fdc..9399933 100644
      pluginWindow.once('closed', () => { pluginWindow = undefined })
      void pluginWindow.loadURL(`${SCHEME}://shell/plugin-manager.html`)
    }
-@@ -333,65 +469,148 @@ async function main(): Promise<void> {
+@@ -333,65 +473,185 @@ async function main(): Promise<void> {
          accelerator: 'CmdOrCtrl+,',
          enabled: development === undefined,
          click: openPluginWindow,
@@ -768,11 +772,9 @@ index 8bc9fdc..9399933 100644
 -    const active = host
 -    host = undefined
 -    void active.stop().finally(() => { app.quit() })
--  })
 +
- }
- 
--const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
++}
++
 +/**
 + * Headless runtime preparation, so launching never installs:
 + * `--agentrouter-prepare-runtime` is run by the installer and activates this
@@ -826,6 +828,37 @@ index 8bc9fdc..9399933 100644
 +    .then(exit, () => { exit(1) })
 +}
 +
++/**
++ * Reinstall this exact release in place when its runtime files are damaged: the
++ * signed installer comes from the domestic mirror (GitHub fallback) through
++ * Electron's session, is verified against the pinned signed manifest and then
++ * runs as an update (keeps the install mode, accounts, settings and sessions).
++ */
++async function repairInPlace(): Promise<boolean> {
++  const signingPath = join(app.getAppPath(), 'update-signing.json')
++  if (!app.isPackaged || !existsSync(signingPath)) return false
++  const signing = JSON.parse(await readFile(signingPath, 'utf8')) as { policy: unknown; testOnly?: boolean }
++  if (signing.testOnly) return false
++  const window = BrowserWindow.getAllWindows().find(candidate => !candidate.isDestroyed())
++  const status = (text: string): void => {
++    void window?.webContents.executeJavaScript('{ const s = document.getElementById("status"); if (s) s.textContent = ' + JSON.stringify(text) + ' }').catch(() => undefined)
++  }
++  status('正在从国内镜像下载修复文件…')
++  const installer = await prepareRepairInstaller({
++    version: app.getVersion(), policy: signing.policy, fetcher: (url: string, init?: RequestInit) => net.fetch(url, init),
++    directory: join(app.getPath('userData'), 'agentrouter-repair'), verifyManifest: verifyUpdateManifest, verifyFile: verifyUpdateFile,
++    download: resumableDownload,
++    onProgress: (progress: { percent: number }) => {
++      window?.setProgressBar(Math.max(0, Math.min(1, progress.percent / 100)))
++      status(`正在从国内镜像下载修复文件… ${Math.floor(progress.percent)}%`)
++    },
+   })
++  status('正在重新安装…')
++  spawn(installer, ['--updated', '--force-run'], { detached: true, stdio: 'ignore' }).unref()
++  return true
+ }
+ 
+-const ownsDesktopInstance = claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
 +const ownsDesktopInstance = prepareMode === undefined && claimDesktopSingleInstance(app, () => { focusPrimaryWindow() })
 +
 +if (ownsDesktopInstance) installUpdateExitHandler({ app, autoUpdater: nativeAutoUpdater, BrowserWindow })
@@ -844,9 +877,16 @@ index 8bc9fdc..9399933 100644
 +  const invalidCredentials = await inspectCredentialStartupFailure(error, credentialHome)
 +  let checkUpdates = false
 +  if (isRuntimeStartupFailure(error)) {
-+    const recovery = await dialog.showMessageBox(runtimeRecoveryDialog(app.getLocale().startsWith('zh')))
-+    if (recovery.response === 1) await shell.openExternal(repairInstallerUrl(app.getVersion()))
-+    checkUpdates = recovery.response === 0
++    const chinese = app.getLocale().startsWith('zh')
++    const recovery = await dialog.showMessageBox(runtimeRecoveryDialog(chinese))
++    if (recovery.response === 0) {
++      if (await repairInPlace().catch(() => false)) { app.exit(0); return }
++      await dialog.showMessageBox({ type: 'error', title: chinese ? '自动修复未完成' : 'Automatic repair did not finish',
++        message: chinese ? '将打开当前版本的国内镜像安装包，下载后覆盖安装即可。账号、配置和会话会保留。'
++          : 'The mirror download of this version will open. Install it over the existing application; accounts, settings and sessions are preserved.' })
++      await shell.openExternal(repairInstallerUrl(app.getVersion()))
++    }
++    checkUpdates = recovery.response === 1
 +  } else if (invalidCredentials) {
 +    const chinese = app.getLocale().startsWith('zh')
 +    const recovery = await dialog.showMessageBox(credentialRecoveryDialog(invalidCredentials, chinese))
@@ -2443,10 +2483,10 @@ index 0000000..f765170
 +  return UUID_PATTERN.test(basename(resolve(directory)))
 +}
 diff --git a/apps/desktop/src/update-coordinator.ts b/apps/desktop/src/update-coordinator.ts
-index c31dcc3..83368ee 100644
+index c31dcc3..a4732ac 100644
 --- a/apps/desktop/src/update-coordinator.ts
 +++ b/apps/desktop/src/update-coordinator.ts
-@@ -1,25 +1,51 @@
+@@ -1,25 +1,56 @@
  /** One Electron release stream for the version-bound shell and dsh seed. */
 -
 -import { existsSync } from 'node:fs'
@@ -2460,6 +2500,7 @@ index c31dcc3..83368ee 100644
 +import { configurePinnedUpdater } from './agentrouter-update-signature.mjs'
 +import { configureUpdateRecovery, updateFailureMessage } from './agentrouter-update-recovery.mjs'
 +import { installResilientTransport, mirroredFetch } from './agentrouter-update-transport.mjs'
++import { checkRollout, installationId } from './agentrouter-update-rollout.mjs'
  const { autoUpdater } = electronUpdater
  
 -/** Checks, downloads, and installs one complete Desktop release. */
@@ -2471,6 +2512,7 @@ index c31dcc3..83368ee 100644
 +  error?: string
 +  releaseInfo?: unknown
 +  preparing?: boolean
++  rollout?: { held: boolean; reason: string; percent?: number }
 +}
 +
 +/** Result of preparing a downloaded release's runtime; display and diagnostics only. */
@@ -2503,11 +2545,14 @@ index c31dcc3..83368ee 100644
     */
 +  prepareRuntime?: (version: string, files: string[], releaseInfo: unknown) => Promise<{ outcome?: string } | undefined>
 +
++  /** Signed staged rollout / remote pause; fails open (see agentrouter-update-rollout.mjs). */
++  rolloutGate?: (version: string) => Promise<{ offer: boolean; reason: string; percent?: number }>
++
    constructor(
      private readonly publish: (state: DesktopUpdateState) => DesktopUpdateState,
      private readonly beforeRestart: () => Promise<void> = async () => {},
      private readonly updater: AppUpdater = autoUpdater,
-@@ -28,68 +54,184 @@ export class DesktopUpdateCoordinator {
+@@ -28,68 +59,203 @@ export class DesktopUpdateCoordinator {
      ),
    ) {
      this.updater.autoDownload = false
@@ -2526,8 +2571,12 @@ index c31dcc3..83368ee 100644
 +      }
 +    }
 +    // Mirror first with per-file GitHub fallback, resumable installer downloads and
-+    // retries. Electron's fetch uses the system proxy like the updater itself.
-+    const fetcher = typeof net?.fetch === 'function' ? (url: string, init?: RequestInit) => net.fetch(url, init) : fetch
++    // retries. Every update request uses Electron's session (system proxy and PAC),
++    // like electron-updater itself. Never Node's global fetch: it ignores the proxy,
++    // which broke <=3.0.19 signature checks where GitHub is reachable only via a proxy.
++    const fetcher = typeof net?.fetch === 'function'
++      ? (url: string, init?: RequestInit) => net.fetch(url, init)
++      : async () => { throw new Error('Electron net.fetch is unavailable') }
 +    if (app.isPackaged && (this.updater as unknown as { httpExecutor?: unknown }).httpExecutor) {
 +      installResilientTransport(this.updater, { fetcher })
 +    }
@@ -2535,6 +2584,10 @@ index c31dcc3..83368ee 100644
 +    if (signaturePath !== undefined && existsSync(signaturePath)) {
 +      const signing = JSON.parse(readFileSync(signaturePath, 'utf8'))
 +      this.signatureCheck = configurePinnedUpdater(this.updater, signing, () => this.availableVersion, mirroredFetch(fetcher))
++      if (!signing.testOnly) {
++        const idPath = join(app.getPath('userData'), 'agentrouter-installation-id')
++        this.rolloutGate = version => checkRollout({ version, installationId: installationId(idPath), policy: signing.policy, fetcher })
++      }
 +    }
 +    this.updater.on?.('download-progress', (progress) => {
 +      if (this.detail.phase !== 'downloading') return
@@ -2619,12 +2672,24 @@ index c31dcc3..83368ee 100644
          return this.publish({ phase: 'idle' })
        }
        const result = await this.updater.checkForUpdates()
-       const version = result?.isUpdateAvailable === true ? result.updateInfo.version : undefined
+-      const version = result?.isUpdateAvailable === true ? result.updateInfo.version : undefined
++      let version = result?.isUpdateAvailable === true ? result.updateInfo.version : undefined
++      let rollout: UpdateDetail['rollout']
++      if (version && this.rolloutGate) {
++        // A paused or not-yet-reached release looks current; it never selects other bytes.
++        const decision: { offer: boolean; reason: string; percent?: number } = await this.rolloutGate(version)
++          .catch(() => ({ offer: true, reason: 'unavailable' }))
++        if (!decision.offer) {
++          rollout = { held: true, reason: decision.reason, ...(decision.percent === undefined ? {} : { percent: decision.percent }) }
++          version = undefined
++        }
++      }
        this.availableVersion = version
 -      return version === undefined
 -        ? this.publish({ phase: 'idle' })
 -        : this.publish({ phase: 'available', version })
-+      this.detail = { phase: version ? 'available' : 'current', checkedAt: new Date().toISOString(), releaseInfo: result?.updateInfo }
++      this.detail = { phase: version ? 'available' : 'current', checkedAt: new Date().toISOString(), releaseInfo: result?.updateInfo,
++        ...(rollout ? { rollout } : {}) }
 +      return this.publish(version ? { phase: 'available', version } : { phase: 'idle' })
 +    } catch {
 +      this.detail = { ...this.detail, phase: 'error', error: '暂时无法检查更新，请检查网络后重试。' }
@@ -3711,7 +3776,7 @@ index 0000000..f5d6a47
 +  }, 60_000)
 +})
 diff --git a/apps/desktop/tests/update-coordinator.spec.ts b/apps/desktop/tests/update-coordinator.spec.ts
-index 272ef03..2532512 100644
+index 272ef03..3d6609b 100644
 --- a/apps/desktop/tests/update-coordinator.spec.ts
 +++ b/apps/desktop/tests/update-coordinator.spec.ts
 @@ -3,9 +3,9 @@ import type { AppUpdater } from 'electron-updater'
@@ -3725,7 +3790,7 @@ index 272ef03..2532512 100644
    default: { autoUpdater: { autoDownload: true, autoInstallOnAppQuit: true } },
  }))
  
-@@ -41,8 +41,95 @@ describe('desktop release metadata', () => {
+@@ -41,8 +41,110 @@ describe('desktop release metadata', () => {
    })
  })
  
@@ -3756,6 +3821,21 @@ index 272ef03..2532512 100644
 +    await coordinator.restart('1.0.1')
 +    expect(beforeRestart).toHaveBeenCalledOnce()
 +    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true)
++  })
++
++  it('holds back a paused or staged release and fails open when the rollout gate breaks', async () => {
++    const updater = { checkForUpdates: vi.fn(async () => ({ isUpdateAvailable: true, updateInfo: { version: '1.0.1' } })),
++      downloadUpdate: vi.fn(async () => []), quitAndInstall: vi.fn() } as unknown as AppUpdater
++    const coordinator = new DesktopUpdateCoordinator(state => state, async () => {}, updater, () => true)
++    coordinator.rolloutGate = vi.fn(async () => ({ offer: false, reason: 'paused', percent: 10 }))
++    await expect(coordinator.check()).resolves.toEqual({ phase: 'idle' })
++    expect(coordinator.status()).toMatchObject({ phase: 'current', canDownload: false, rollout: { held: true, reason: 'paused', percent: 10 } })
++    await expect(coordinator.download('1.0.1')).rejects.toThrow(/changed/)
++    coordinator.rolloutGate = vi.fn(async () => { throw new Error('offline') })
++    await expect(coordinator.check()).resolves.toEqual({ phase: 'available', version: '1.0.1' })
++    expect(coordinator.status().rollout).toBeUndefined()
++    coordinator.rolloutGate = vi.fn(async () => ({ offer: true, reason: 'staged', percent: 50 }))
++    await expect(coordinator.check()).resolves.toEqual({ phase: 'available', version: '1.0.1' })
 +  })
 +
 +  it('retains a retry action after a failed download without exposing raw errors', async () => {
@@ -3821,7 +3901,7 @@ index 272ef03..2532512 100644
      const states: DesktopUpdateState[] = []
      const downloadUpdate = vi.fn(async () => [])
      const quitAndInstall = vi.fn()
-@@ -70,9 +157,9 @@ describe('desktop update coordinator', () => {
+@@ -70,9 +172,9 @@ describe('desktop update coordinator', () => {
      await expect(coordinator.check()).resolves.toEqual({ phase: 'available', version: '1.1.0' })
      await expect(coordinator.install()).resolves.toEqual({ phase: 'ready', version: '1.1.0' })
      expect(downloadUpdate).toHaveBeenCalledOnce()
@@ -3832,7 +3912,7 @@ index 272ef03..2532512 100644
    })
  
    it('queues install behind an in-flight check instead of returning the check result', async () => {
-@@ -99,4 +186,39 @@ describe('desktop update coordinator', () => {
+@@ -99,4 +201,39 @@ describe('desktop update coordinator', () => {
      await expect(installing).resolves.toEqual({ phase: 'ready', version: '1.2.0' })
      expect(downloadUpdate).toHaveBeenCalledOnce()
    })

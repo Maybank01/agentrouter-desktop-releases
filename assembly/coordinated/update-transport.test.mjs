@@ -12,7 +12,7 @@ const body = randomBytes(3 * 1024 * 1024 + 123)
 const sha512 = createHash('sha512').update(body).digest('base64')
 
 /** A real HTTP server whose first responses drop the connection mid-body. */
-async function flakyServer({ drops = 1, dropAfter = 1024 * 1024, status } = {}) {
+async function flakyServer({ drops = 1, dropAfter = 1024 * 1024, status, hang = false } = {}) {
   const requests = []
   let remainingDrops = drops
   const server = createServer((req, res) => {
@@ -24,7 +24,8 @@ async function flakyServer({ drops = 1, dropAfter = 1024 * 1024, status } = {}) 
     res.writeHead(range ? 206 : 200, { 'content-length': slice.length, 'accept-ranges': 'bytes',
       ...(range ? { 'content-range': `bytes ${start}-${body.length - 1}/${body.length}` } : {}) })
     if (remainingDrops-- > 0) {
-      res.write(slice.subarray(0, dropAfter), () => { res.socket.destroy() })
+      // A blackholed connection keeps the socket open without sending anything.
+      res.write(slice.subarray(0, dropAfter), () => { if (!hang) res.socket.destroy() })
       return
     }
     res.end(slice)
@@ -57,7 +58,7 @@ test('resumes with HTTP Range after connection drops and verifies SHA-512', asyn
   try {
     const progress = []
     const destination = join(root, 'installer.exe')
-    await resumableDownload({ sources: [server.url], destination, sha512, partialDir: join(root, 'partial'), wait: noWait,
+    await resumableDownload({ sources: [server.url], destination, sha512, partialDir: join(root, 'partial'), fetcher: fetch, wait: noWait,
       onProgress: value => progress.push(value) })
     assert.deepEqual(readFileSync(destination), body)
     assert.equal(server.requests[0].range, undefined)
@@ -76,13 +77,13 @@ test('keeps a partial download across restarts and continues from it', async () 
     // The application quits after the first interruption.
     let quit = false
     await assert.rejects(resumableDownload({ sources: [first.url], destination: join(root, 'a.exe'), sha512,
-      partialDir: join(root, 'partial'), wait: async () => { quit = true }, isCancelled: () => quit }), error => error.name === 'CancellationError')
+      partialDir: join(root, 'partial'), fetcher: fetch, wait: async () => { quit = true }, isCancelled: () => quit }), error => error.name === 'CancellationError')
   } finally { await first.close() }
   const retained = readdirSync(join(root, 'partial'))
   assert.equal(retained.length, 1)
   const second = await flakyServer({ drops: 0 })
   try {
-    await resumableDownload({ sources: [second.url], destination: join(root, 'b.exe'), sha512, partialDir: join(root, 'partial'), wait: noWait })
+    await resumableDownload({ sources: [second.url], destination: join(root, 'b.exe'), sha512, partialDir: join(root, 'partial'), fetcher: fetch, wait: noWait })
     assert.match(second.requests[0].range, /^bytes=\d+-$/)
     assert.deepEqual(readFileSync(join(root, 'b.exe')), body)
   } finally { await second.close(); rmSync(root, { recursive: true, force: true }) }
@@ -93,9 +94,27 @@ test('reports an interruption only after retries without progress', async () => 
   const down = await flakyServer({ status: 503 })
   try {
     await assert.rejects(resumableDownload({ sources: [down.url], destination: join(root, 'a.exe'), sha512,
-      partialDir: join(root, 'partial'), wait: noWait, delays: [0, 0, 0] }), error => error.code === 'UPDATE_DOWNLOAD_INTERRUPTED')
+      partialDir: join(root, 'partial'), fetcher: fetch, wait: noWait, delays: [0, 0, 0] }), error => error.code === 'UPDATE_DOWNLOAD_INTERRUPTED')
     assert.equal(down.requests.length, 4)
   } finally { await down.close(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a stalled connection is aborted and resumed from the retained offset', async () => {
+  const server = await flakyServer({ drops: 1, hang: true })
+  const root = temporary()
+  try {
+    await resumableDownload({ sources: [server.url], destination: join(root, 's.exe'), sha512, partialDir: join(root, 'partial'),
+      fetcher: fetch, wait: noWait, stallMs: 300 })
+    assert.deepEqual(readFileSync(join(root, 's.exe')), body)
+    assert.equal(server.requests.length, 2)
+    assert.ok(Number(/^bytes=(\d+)-$/.exec(server.requests[1].range)[1]) > 0)
+  } finally { await server.close(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test('requires an explicit fetcher: Node global fetch ignores the system proxy', async () => {
+  await assert.rejects(resumableDownload({ sources: ['https://example.test/a.exe'], destination: 'x', sha512, partialDir: temporary() }), /explicit/)
+  assert.throws(() => installResilientTransport({ httpExecutor: { download() {} } }, {}), /explicit/)
+  assert.throws(() => mirroredFetch(), /explicit/)
 })
 
 test('falls back to the next source per file and rejects corrupted bytes', async () => {
@@ -103,11 +122,11 @@ test('falls back to the next source per file and rejects corrupted bytes', async
   const good = await flakyServer({ drops: 0 })
   const root = temporary()
   try {
-    await resumableDownload({ sources: [missing.url, good.url], destination: join(root, 'x.exe'), sha512, partialDir: join(root, 'p'), wait: noWait })
+    await resumableDownload({ sources: [missing.url, good.url], destination: join(root, 'x.exe'), sha512, partialDir: join(root, 'p'), fetcher: fetch, wait: noWait })
     assert.equal(missing.requests.length, 1)
     assert.deepEqual(readFileSync(join(root, 'x.exe')), body)
     const wrong = createHash('sha512').update('other').digest('base64')
-    await assert.rejects(resumableDownload({ sources: [good.url], destination: join(root, 'y.exe'), sha512: wrong, partialDir: join(root, 'p'), wait: noWait }),
+    await assert.rejects(resumableDownload({ sources: [good.url], destination: join(root, 'y.exe'), sha512: wrong, partialDir: join(root, 'p'), fetcher: fetch, wait: noWait }),
       error => error.code === 'UPDATE_FILE_INVALID')
     assert.equal(existsSync(join(root, 'y.exe')), false)
   } finally { await missing.close(); await good.close(); rmSync(root, { recursive: true, force: true }) }
