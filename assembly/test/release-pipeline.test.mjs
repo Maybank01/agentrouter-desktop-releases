@@ -101,3 +101,28 @@ test('mirror verification follows the client layout and rejects differing bytes'
   await assert.rejects(verifyMirror({ version: '3.0.20', assets, fetcher: served({ 'AgentRouter-3.0.20-x64-Setup.exe.blockmap': Buffer.from('blockmaX') }), ...quick }), /bytes differ/)
   await assert.rejects(verifyMirror({ version: '3.0.20', assets, fetcher: served({ 'latest.yml': Buffer.from('version: 3.0.19\n') }), ...quick }), /did not converge/)
 })
+
+test('run drafts are named per run and only never-published drafts are deletable', async () => {
+  const { runDraftTag, isRunDraftTag, assertDeletableRunDraft } = await import('../run-drafts.mjs')
+  assert.equal(runDraftTag('baseline', '35954368967'), 'baseline-35954368967')
+  assert.equal(runDraftTag('rehearsal', 42), 'rehearsal-42')
+  assert.throws(() => runDraftTag('v3.0.20', 1))
+  assert.throws(() => runDraftTag('baseline', '0'))
+  for (const tag of ['v3.0.19', 'baseline-', 'rehearsal-1a', 'latest', 'baseline-1/../v3.0.19']) assert.equal(isRunDraftTag(tag), false, tag)
+  const draft = { tag_name: 'rehearsal-7', draft: true, published_at: null }
+  assert.equal(assertDeletableRunDraft(draft, 'rehearsal-7'), draft)
+  assert.throws(() => assertDeletableRunDraft({ ...draft, draft: false, published_at: '2026-09-24T00:00:00Z' }, 'rehearsal-7'), /not a draft/)
+  assert.throws(() => assertDeletableRunDraft({ ...draft, published_at: '2026-09-24T00:00:00Z' }, 'rehearsal-7'), /published/)
+  assert.throws(() => assertDeletableRunDraft({ ...draft, tag_name: 'v3.0.19' }, 'v3.0.19'), /not a run draft/)
+})
+
+test('a signed rehearsal can never publish or take a version tag', async () => {
+  const { readFileSync } = await import('node:fs')
+  const source = readFileSync(new URL('../coordinated-release.mjs', import.meta.url), 'utf8')
+  assert.match(source, /const rehearsal = process\.env\.AGENTROUTER_REHEARSAL === '1'/)
+  assert.match(source, /assert\.notEqual\(phase, 'publish', 'A signed rehearsal is never published'\)/)
+  assert.match(source, /assert\.equal\(rehearsal, false, 'A signed rehearsal is never published'\)/)
+  assert.match(source, /runDraftTag\('rehearsal', releaseRun\)/)
+  assert.match(source, /'--draft', '--prerelease'/)
+  assert.match(source, /assert\.equal\(remote\.prerelease, rehearsal\)/)
+})

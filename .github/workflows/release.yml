@@ -16,6 +16,10 @@ on:
         description: Resume an existing signed release from this completed run without rebuilding
         type: string
         default: ''
+      rehearse_signed:
+        description: Sign and stage a never-published rehearsal draft (rehearsal-<run>), run every signed check, then delete it; requires publish=false
+        type: boolean
+        default: false
       profile:
         description: Release profile (hotfix defers only the unsigned pre-sign duplicate of the signed installed checks; recorded in the receipt)
         type: choice
@@ -32,6 +36,10 @@ on:
         default: false
 
 permissions: {}
+
+env:
+  # coordinated-release.mjs stages rehearsal-<run> instead of the version tag and refuses publication.
+  AGENTROUTER_REHEARSAL: ${{ inputs.rehearse_signed && '1' || '' }}
 
 concurrency:
   group: agentrouter-desktop-release
@@ -257,7 +265,7 @@ jobs:
   # against the staged draft in parallel on separate disposable workers.
   coordinated_evidence:
     name: Select reusable installed acceptance evidence
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && inputs.resume_signed_run == ''
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && (inputs.publish || inputs.rehearse_signed) && inputs.resume_signed_run == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -275,6 +283,13 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24.15.0
+      - name: Refuse a rehearsal that could publish
+        if: inputs.rehearse_signed
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        shell: bash
+        run: |
+          if [ "$PUBLISH" = "true" ]; then echo "::error::rehearse_signed requires publish=false"; exit 1; fi
       - name: Require a reviewed formal version before publication
         shell: pwsh
         run: |
@@ -300,7 +315,7 @@ jobs:
   coordinated:
     name: Accept coordinated installers before signing
     needs: coordinated_evidence
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.resume_signed_run == '' && (!inputs.publish || (needs.coordinated_evidence.result == 'success' && needs.coordinated_evidence.outputs.found != 'true' && inputs.profile != 'hotfix')) }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.resume_signed_run == '' && ((!inputs.publish && !inputs.rehearse_signed) || (needs.coordinated_evidence.result == 'success' && needs.coordinated_evidence.outputs.found != 'true' && inputs.profile != 'hotfix')) }}
     runs-on: windows-2025
     timeout-minutes: 60
     permissions:
@@ -323,7 +338,7 @@ jobs:
   coordinated_sign:
     name: Sign and stage the exact product release
     needs: [coordinated_evidence, coordinated]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && inputs.resume_signed_run == '' && needs.coordinated_evidence.result == 'success' && (needs.coordinated_evidence.outputs.found == 'true' || needs.coordinated.result == 'success' || (inputs.profile == 'hotfix' && needs.coordinated.result == 'skipped')) }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && (inputs.publish || inputs.rehearse_signed) && inputs.resume_signed_run == '' && needs.coordinated_evidence.result == 'success' && (needs.coordinated_evidence.outputs.found == 'true' || needs.coordinated.result == 'success' || (inputs.profile == 'hotfix' && needs.coordinated.result == 'skipped')) }}
     runs-on: windows-2025
     environment: windows-signing
     timeout-minutes: 60
@@ -378,7 +393,55 @@ jobs:
           node assembly/coordinated-release.mjs stage "$env:INSTALLER_RECEIPT"
           if ($LASTEXITCODE -ne 0) { throw 'Signed release staging failed' }
           $release = Get-Content assembly/coordinated/release.json -Raw | ConvertFrom-Json
-          "tag=v$($release.productVersion)" >> $env:GITHUB_OUTPUT
+          if ($env:AGENTROUTER_REHEARSAL -eq '1') { "tag=rehearsal-$env:GITHUB_RUN_ID" >> $env:GITHUB_OUTPUT }
+          else { "tag=v$($release.productVersion)" >> $env:GITHUB_OUTPUT }
+      - name: Remove the temporary signing key
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:AGENTROUTER_SIGNING_CERT_THUMBPRINT -match '^[A-Fa-f0-9]{40}$') {
+            $key = "Cert:/CurrentUser/My/$env:AGENTROUTER_SIGNING_CERT_THUMBPRINT"
+            if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -DeleteKey -Force }
+          }
+
+  # The signed loopback baseline depends only on the pinned baseline, the plugin
+  # bytes, the signing identity and this commit's adapter, so it is signed on its
+  # own worker while the product is signed. It travels to the update worker as a
+  # never-published draft of this run (visible only to repository writers, never
+  # a product asset or feed) and is re-verified before installation.
+  coordinated_signed_baseline:
+    name: Sign the loopback update baseline
+    needs: coordinated_evidence
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && (inputs.publish || inputs.rehearse_signed) && inputs.resume_signed_run == '' && needs.coordinated_evidence.result == 'success' }}
+    runs-on: windows-2025
+    environment: windows-signing
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Import the reviewed self-signed key without changing Windows root trust
+        shell: pwsh
+        env:
+          AGENTROUTER_SIGNING_PFX: ${{ secrets.AGENTROUTER_SIGNING_PFX }}
+          AGENTROUTER_SIGNING_PASSWORD: ${{ secrets.AGENTROUTER_SIGNING_PASSWORD }}
+        run: ./assembly/coordinated/import-signing-key.ps1
+      - name: Build and sign the loopback baseline from the reviewed release input
+        shell: pwsh
+        run: |
+          node assembly/coordinated/installer-acceptance.mjs assembly/coordinated/release.json --prepare-baseline=.local/signed-baseline > signed-baseline.log
+          if ($LASTEXITCODE -ne 0) { Get-Content signed-baseline.log -Tail 60; throw 'Signed baseline preparation failed' }
+          Get-Content signed-baseline.log -Tail 1
+      - name: Stage the baseline as this run's never-published draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node assembly/run-drafts.mjs stage-baseline .local/signed-baseline
       - name: Remove the temporary signing key
         if: always()
         shell: pwsh
@@ -390,10 +453,9 @@ jobs:
 
   coordinated_signed_update:
     name: Signed native update and restart
-    needs: coordinated_sign
-    if: ${{ !cancelled() && needs.coordinated_sign.result == 'success' }}
+    needs: [coordinated_sign, coordinated_signed_baseline]
+    if: ${{ !cancelled() && needs.coordinated_sign.result == 'success' && needs.coordinated_signed_baseline.result == 'success' }}
     runs-on: windows-2025
-    environment: windows-signing
     timeout-minutes: 45
     permissions:
       contents: write
@@ -413,7 +475,11 @@ jobs:
         run: gh release download "$env:RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir .local/signed-release
       - name: Verify the draft was staged from this commit by this run
         run: node assembly/coordinated-release.mjs signed-target .local/signed-release .local/signed-installer.json
-      - name: Build the reviewed source for the signed baseline
+      - name: Download this run's signed baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node assembly/run-drafts.mjs download-baseline .local/signed-baseline
+      - name: Build the reviewed source for the installed target metadata
         id: build
         shell: pwsh
         run: |
@@ -421,19 +487,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content candidate-build.log -Tail 60; throw 'Product build failed' }
           $built = Get-Content candidate-build.log -Tail 1 | ConvertFrom-Json
           "candidate=$($built.candidate)" >> $env:GITHUB_OUTPUT
-      - name: Import the reviewed self-signed key without changing Windows root trust
-        shell: pwsh
-        env:
-          AGENTROUTER_SIGNING_PFX: ${{ secrets.AGENTROUTER_SIGNING_PFX }}
-          AGENTROUTER_SIGNING_PASSWORD: ${{ secrets.AGENTROUTER_SIGNING_PASSWORD }}
-        run: ./assembly/coordinated/import-signing-key.ps1
       - name: Exercise native signed update and restart using these exact release bytes
         id: accept
         shell: pwsh
         env:
           CANDIDATE_FILE: ${{ steps.build.outputs.candidate }}
         run: |
-          node assembly/coordinated/installer-acceptance.mjs "$env:CANDIDATE_FILE" --scenario=native-updater --signed-installer=.local/signed-installer.json > signed-update.log
+          node assembly/coordinated/installer-acceptance.mjs "$env:CANDIDATE_FILE" --scenario=native-updater --signed-installer=.local/signed-installer.json --baseline-package=.local/signed-baseline > signed-update.log
           if ($LASTEXITCODE -ne 0) { Get-Content signed-update.log -Tail 60; throw 'Native signed update acceptance failed' }
           $accepted = Get-Content signed-update.log -Tail 1 | ConvertFrom-Json
           "receipt=$($accepted.receipt)" >> $env:GITHUB_OUTPUT
@@ -442,14 +502,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ACCEPTANCE_RECEIPT: ${{ steps.accept.outputs.receipt }}
         run: node assembly/coordinated-release.mjs record .local/signed-release native-updater "$env:ACCEPTANCE_RECEIPT"
-      - name: Remove the temporary signing key
-        if: always()
-        shell: pwsh
-        run: |
-          if ($env:AGENTROUTER_SIGNING_CERT_THUMBPRINT -match '^[A-Fa-f0-9]{40}$') {
-            $key = "Cert:/CurrentUser/My/$env:AGENTROUTER_SIGNING_CERT_THUMBPRINT"
-            if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -DeleteKey -Force }
-          }
 
   coordinated_signed_legacy:
     name: Signed legacy Profile migration
@@ -531,7 +583,7 @@ jobs:
   coordinated_publish:
     name: Publish the accepted signed release and verify delivery
     needs: [coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && ((needs.coordinated_sign.result == 'success' && needs.coordinated_signed_update.result == 'success' && needs.coordinated_signed_legacy.result == 'success' && needs.coordinated_signed_install.result == 'success') || inputs.resume_signed_run != '') }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && !inputs.rehearse_signed && ((needs.coordinated_sign.result == 'success' && needs.coordinated_signed_update.result == 'success' && needs.coordinated_signed_legacy.result == 'success' && needs.coordinated_signed_install.result == 'success') || inputs.resume_signed_run != '') }}
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -598,7 +650,7 @@ jobs:
     name: Release timeline and budgets
     # Always measured after a coordinated run: per-job queue/duration against
     # assembly/release-budgets.json. A failed job or breach opens an incident.
-    needs: [coordinated_evidence, coordinated, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
+    needs: [coordinated_evidence, coordinated, coordinated_sign, coordinated_signed_baseline, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.delivery == 'coordinated' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -619,3 +671,25 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.profile }}
           TIMELINE_JOB_NAME: Release timeline and budgets
         run: node assembly/release-timeline.mjs ${{ inputs.publish && '--incident' || '' }}
+
+  coordinated_run_drafts:
+    name: Remove this run's never-published drafts
+    # Deletes only baseline-<run> and, in a rehearsal, rehearsal-<run>, after
+    # rechecking each is a never-published draft. Product version drafts stay.
+    needs: [coordinated_signed_baseline, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && (inputs.publish || inputs.rehearse_signed) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - name: Delete this run's baseline and rehearsal drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node assembly/run-drafts.mjs cleanup

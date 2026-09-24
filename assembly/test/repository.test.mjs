@@ -97,8 +97,26 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
   const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8')
   const lane = workflow.split('\n  # Coordinated lane:')[1]
   const jobs = Object.fromEntries(lane.split(/\n  (?=[a-z_]+:\r?\n)/).slice(1).map(body => [body.slice(0, body.indexOf(':')), body]))
-  assert.deepEqual(Object.keys(jobs), ['coordinated_evidence', 'coordinated', 'coordinated_sign', 'coordinated_signed_update',
-    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_publish', 'coordinated_outcome', 'coordinated_timeline'])
+  assert.deepEqual(Object.keys(jobs), ['coordinated_evidence', 'coordinated', 'coordinated_sign', 'coordinated_signed_baseline', 'coordinated_signed_update',
+    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_publish', 'coordinated_outcome', 'coordinated_timeline', 'coordinated_run_drafts'])
+  // A signed rehearsal stages a never-published draft and can never publish.
+  assert.match(workflow, /rehearse_signed:\r?\n        description: [^\n]*requires publish=false/)
+  assert.match(workflow, /AGENTROUTER_REHEARSAL: \$\{\{ inputs\.rehearse_signed && '1' \|\| '' \}\}/)
+  assert.match(jobs.coordinated_evidence, /rehearse_signed requires publish=false/)
+  assert.match(jobs.coordinated_publish, /inputs\.publish && !inputs\.rehearse_signed && /)
+  assert.match(jobs.coordinated, /\(!inputs\.publish && !inputs\.rehearse_signed\)/)
+  // The run's baseline and rehearsal drafts are removed by a job holding no signing secret.
+  assert.match(jobs.coordinated_run_drafts, /if: \$\{\{ always\(\) && /)
+  assert.match(jobs.coordinated_run_drafts, /node assembly\/run-drafts\.mjs cleanup/)
+  assert.doesNotMatch(jobs.coordinated_run_drafts, /secrets\.|environment:/)
+  // The loopback baseline is signed once, in parallel with the product, and re-verified by its consumer.
+  assert.match(jobs.coordinated_signed_baseline, /needs: coordinated_evidence\r?\n/)
+  assert.match(jobs.coordinated_signed_baseline, /--prepare-baseline=\.local\/signed-baseline/)
+  assert.match(jobs.coordinated_signed_baseline, /node assembly\/run-drafts\.mjs stage-baseline/)
+  assert.match(jobs.coordinated_signed_update, /needs: \[coordinated_sign, coordinated_signed_baseline\]/)
+  assert.match(jobs.coordinated_signed_update, /node assembly\/run-drafts\.mjs download-baseline/)
+  assert.match(jobs.coordinated_signed_update, /--baseline-package=\.local\/signed-baseline/)
+  assert.doesNotMatch(jobs.coordinated_signed_update, /secrets\.|import-signing-key/)
   // The hotfix profile defers only the unsigned pre-sign duplicate; signing and
   // every signed installed check still gate publication, and it is recorded.
   assert.match(workflow, /options: \[standard, hotfix\]/)
@@ -130,12 +148,12 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
   assert.match(jobs.coordinated, /needs\.coordinated_evidence\.outputs\.found != 'true'/)
   assert.match(jobs.coordinated_sign, /needs\.coordinated_evidence\.outputs\.found == 'true' \|\| needs\.coordinated\.result == 'success'/)
   assert.match(jobs.coordinated_sign, /ACCEPTANCE_EVIDENCE_JSON: \$\{\{ needs\.coordinated_evidence\.outputs\.evidence \}\}/)
-  // Only signing and the signed-baseline update hold the signing environment.
-  assert.deepEqual(Object.keys(jobs).filter(name => /environment: windows-signing/.test(jobs[name])), ['coordinated_sign', 'coordinated_signed_update'])
+  // Only the two jobs that sign hold the signing environment.
+  assert.deepEqual(Object.keys(jobs).filter(name => /environment: windows-signing/.test(jobs[name])), ['coordinated_sign', 'coordinated_signed_baseline'])
   for (const name of ['coordinated_signed_update', 'coordinated_signed_legacy', 'coordinated_signed_install']) {
-    assert.match(jobs[name], /needs: coordinated_sign\r?\n/)
+    if (name !== 'coordinated_signed_update') assert.match(jobs[name], /needs: coordinated_sign\r?\n/)
     // A skipped pre-sign candidate (reused evidence) must not skip signed checks.
-    assert.match(jobs[name], /if: \$\{\{ !cancelled\(\) && needs\.coordinated_sign\.result == 'success' \}\}/)
+    assert.match(jobs[name], /if: \$\{\{ !cancelled\(\) && needs\.coordinated_sign\.result == 'success'( && needs\.coordinated_signed_baseline\.result == 'success')? \}\}/)
     assert.match(jobs[name], /gh release download "\$env:RELEASE_TAG"/)
     assert.match(jobs[name], /node assembly\/coordinated-release\.mjs record \.local\/signed-release /)
   }
