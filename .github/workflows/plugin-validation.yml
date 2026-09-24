@@ -8,7 +8,7 @@ on:
         description: Product validation task
         required: true
         type: choice
-        options: [verify, candidate, sync]
+        options: [verify, candidate, sync, rehearsal]
       source_sha:
         description: Immutable private source commit (40 lowercase hex characters)
         required: true

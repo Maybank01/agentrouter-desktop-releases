@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url'
 export const sourceRepository = 'Maybank01/agentrouter-dsh-plugins'
 export const executionRepository = 'Maybank01/agentrouter-desktop-releases'
 export const workflowPath = '.github/workflows/plugin-validation.yml'
-const tasks = new Set(['verify', 'candidate', 'sync'])
+// rehearsal: candidate stages for pipeline dry runs; never stored as a candidate.
+const tasks = new Set(['verify', 'candidate', 'sync', 'rehearsal'])
 const shaPattern = /^[a-f0-9]{40}$/
 
 function requireValue(condition, code) {
