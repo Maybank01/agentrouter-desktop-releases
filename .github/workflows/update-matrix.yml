@@ -84,9 +84,9 @@ jobs:
         name: Resolve the candidate and the published baselines
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_TAG: ${{ inputs.candidate_tag || 'v3.0.20' }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag || 'v3.0.21' }}
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
-          BASELINES: ${{ inputs.baselines || (github.event_name == 'push' && '3.0.14,3.0.17,3.0.19' || '') }}
+          BASELINES: ${{ inputs.baselines || (github.event_name == 'push' && '3.0.14,3.0.17,3.0.19,3.0.20' || '') }}
           MODES: ${{ inputs.modes }}
           FAULTS: ${{ inputs.faults }}
           EXPECT_RELEASE_JSON: ${{ inputs.release_run }}
