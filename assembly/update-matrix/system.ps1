@@ -58,7 +58,10 @@ if ($Action -eq 'Setup') {
   if (Test-Path -LiteralPath $StateFile) { throw 'Interception is already set up' }
   $state = [ordered]@{ caThumbprint = $null; proxySet = $false }
   $state | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding utf8
-  $ca = Import-Certificate -FilePath $CaFile -CertStoreLocation Cert:\LocalMachine\Root
+  # The X509Store API avoids the Cert: provider, which an inherited PowerShell 7 module path can hide.
+  $ca = [Security.Cryptography.X509Certificates.X509Certificate2]::new($CaFile)
+  $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
+  $store.Open('ReadWrite'); try { $store.Add($ca) } finally { $store.Close() }
   $state.caThumbprint = $ca.Thumbprint
   $state | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding utf8
   $lines = @($HostNames -split ',' | Where-Object { $_ } | ForEach-Object { "127.0.0.1 $_ $marker" })
@@ -88,8 +91,10 @@ $kept = @([IO.File]::ReadAllLines($hostsFile) | Where-Object { -not $_.EndsWith(
 [IO.File]::WriteAllText($hostsFile, ($kept -join "`r`n") + "`r`n", [Text.Encoding]::ASCII)
 ipconfig /flushdns | Out-Null
 if ($state.caThumbprint -match '^[A-F0-9]{40}$') {
-  $path = "Cert:\LocalMachine\Root\$($state.caThumbprint)"
-  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+  $store = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
+  $store.Open('ReadWrite')
+  try { foreach ($item in @($store.Certificates.Find('FindByThumbprint', $state.caThumbprint, $false))) { $store.Remove($item) } }
+  finally { $store.Close() }
 }
 [Environment]::SetEnvironmentVariable('NODE_EXTRA_CA_CERTS', $null, 'User')
 Remove-Item -LiteralPath $StateFile -Force

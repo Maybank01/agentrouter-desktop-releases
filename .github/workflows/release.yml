@@ -614,10 +614,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node assembly/feed-compat.mjs .local/signed-release
 
+  # Update from old published versions (a gate, hotfix included): the REAL
+  # published installers of the field baselines update to this staged draft
+  # through the product's own updater under normal, GitHub-blocked and
+  # system-proxy networks, in parallel with the other signed checks.
+  coordinated_update_matrix:
+    name: Update path matrix
+    needs: coordinated_sign
+    if: ${{ !cancelled() && needs.coordinated_sign.result == 'success' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/update-matrix.yml
+    with:
+      candidate_tag: ${{ needs.coordinated_sign.outputs.tag }}
+      release_run: true
+
   coordinated_publish:
     name: Publish the accepted signed release and verify delivery
-    needs: [coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && !inputs.rehearse_signed && ((needs.coordinated_sign.result == 'success' && needs.coordinated_signed_update.result == 'success' && needs.coordinated_signed_legacy.result == 'success' && needs.coordinated_signed_install.result == 'success' && needs.coordinated_feed_compat.result == 'success') || inputs.resume_signed_run != '') }}
+    needs: [coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_update_matrix]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && inputs.publish && !inputs.rehearse_signed && ((needs.coordinated_sign.result == 'success' && needs.coordinated_signed_update.result == 'success' && needs.coordinated_signed_legacy.result == 'success' && needs.coordinated_signed_install.result == 'success' && needs.coordinated_feed_compat.result == 'success' && needs.coordinated_update_matrix.result == 'success') || inputs.resume_signed_run != '') }}
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
@@ -676,7 +691,7 @@ jobs:
     name: Require the requested publication
     # A requested publication must never report success while any gate was
     # skipped: GitHub skips dependants of a skipped job unless told otherwise.
-    needs: [coordinated_evidence, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_publish]
+    needs: [coordinated_evidence, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_update_matrix, coordinated_publish]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.delivery == 'coordinated' && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -694,7 +709,7 @@ jobs:
     name: Release timeline and budgets
     # Always measured after a coordinated run: per-job queue/duration against
     # assembly/release-budgets.json. A failed job or breach opens an incident.
-    needs: [coordinated_evidence, coordinated, coordinated_sign, coordinated_signed_baseline, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_publish]
+    needs: [coordinated_evidence, coordinated, coordinated_sign, coordinated_signed_baseline, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_update_matrix, coordinated_publish]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.delivery == 'coordinated' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -720,7 +735,7 @@ jobs:
     name: Remove this run's never-published drafts
     # Deletes only baseline-<run> and, in a rehearsal, rehearsal-<run>, after
     # rechecking each is a never-published draft. Product version drafts stay.
-    needs: [coordinated_signed_baseline, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_publish]
+    needs: [coordinated_signed_baseline, coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_update_matrix, coordinated_publish]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.delivery == 'coordinated' && (inputs.publish || inputs.rehearse_signed) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

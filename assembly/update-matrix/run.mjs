@@ -45,6 +45,9 @@ assert.equal(process.platform, 'win32')
 assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Installing published installers requires a disposable hosted Windows worker')
 assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted', 'Installing published installers requires a disposable hosted Windows worker')
 
+// Windows PowerShell children must not inherit the workflow shell's PowerShell 7 module path.
+for (const name of Object.keys(process.env)) if (name.toLowerCase() === 'psmodulepath') delete process.env[name]
+
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const tryJson = path => { try { return json(path) } catch { return undefined } }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
