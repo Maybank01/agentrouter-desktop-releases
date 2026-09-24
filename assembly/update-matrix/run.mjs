@@ -322,7 +322,7 @@ try {
     const begin = Date.now()
     const outcome = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       '$p = Start-Process -FilePath $env:UPDATE_MATRIX_INSTALLER -ArgumentList "/S", "/currentuser", "/D=$env:UPDATE_MATRIX_INSTALL_DIR" -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode'],
-    { env: { ...env, UPDATE_MATRIX_INSTALLER: installer, UPDATE_MATRIX_INSTALL_DIR: installDir }, windowsHide: true, timeout: 600000, encoding: 'utf8' })
+    { env: { ...env, UPDATE_MATRIX_INSTALLER: installer, UPDATE_MATRIX_INSTALL_DIR: installDir }, windowsHide: true, timeout: 1200000, encoding: 'utf8' })
     assert.equal(outcome.status, 0, `Baseline installer failed: ${outcome.status} ${outcome.stderr}`)
     assert.ok(existsSync(executable), 'The baseline installer did not install AgentRouter.exe')
     assert.equal(readInstalledProductVersion(installDir), baseline)

@@ -15,6 +15,12 @@ export const repository = 'Maybank01/agentrouter-desktop-releases'
 export const pinnedBaselines = Object.freeze(['3.0.14', '3.0.17', '3.0.19', '3.0.20'])
 /** First release whose transport fetches mirror-first through Electron's network stack. */
 export const mirrorTransportSince = '3.0.20'
+/**
+ * First release whose update check reaches the mirror's latest.yml when GitHub
+ * is blocked. Set it when the adapter fix ships; until then (null) every
+ * baseline's github-blocked check is a documented known failure.
+ */
+export const mirrorFeedFixedIn = null
 export const networkModes = Object.freeze({
   normal: 'GitHub and the agentrouter.top mirror are both reachable directly.',
   'github-blocked': 'Direct connections to github.com and *.githubusercontent.com are reset; the mirror is reachable.',
@@ -52,6 +58,13 @@ export function defaultBaselines(candidate, releases) {
  */
 export function expectationFor(baseline, mode) {
   assert.ok(Object.hasOwn(networkModes, mode), `Unknown network mode ${mode}`)
+  if (mode === 'github-blocked' && compareVersions(baseline, mirrorTransportSince) >= 0
+    && (mirrorFeedFixedIn === null || compareVersions(baseline, mirrorFeedFixedIn) < 0)) {
+    // electron-updater requests latest.yml?noCache=<random>; the transport's exact
+    // URL match misses it, so the feed never goes mirror-first (found by this matrix
+    // on 3.0.20/3.0.21). A newer candidate cannot change an installed baseline's check.
+    return { expected: 'known-failure', knownFailureSteps: ['check'] }
+  }
   if (mode === 'normal' || mode === 'faults' || compareVersions(baseline, mirrorTransportSince) >= 0) return { expected: 'pass', knownFailureSteps: [] }
   // Blocked GitHub: the feed itself (check) or the pinned manifest (download) is unreachable.
   // System proxy: the feed and installer download through Chromium; only the Node manifest fetch fails.
