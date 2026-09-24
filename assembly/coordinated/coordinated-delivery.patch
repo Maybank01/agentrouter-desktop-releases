@@ -928,7 +928,7 @@ index 8bc9fdc..469ca41 100644
    app.exit(1)
  })
 diff --git a/apps/desktop/src/project-manager.ts b/apps/desktop/src/project-manager.ts
-index b9b94f7..037461f 100644
+index b9b94f7..b64ea6e 100644
 --- a/apps/desktop/src/project-manager.ts
 +++ b/apps/desktop/src/project-manager.ts
 @@ -15,14 +15,16 @@ import {
@@ -1262,7 +1262,7 @@ index b9b94f7..037461f 100644
  
  function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
    const manifest = projectManifest(projectDir)
-@@ -325,22 +518,132 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
+@@ -325,22 +518,138 @@ function inspectPlugin(projectDir: string, requestedName: string): DesktopPlugin
    return { name: requestedName, version: manifest.version }
  }
  
@@ -1280,10 +1280,16 @@ index b9b94f7..037461f 100644
 +/** Windows STATUS_STACK_BUFFER_OVERRUN: a native fail-fast abort that prints nothing. */
 +const NATIVE_FAIL_FAST_STATUSES: ReadonlySet<string> = new Set(['3221226505', '-1073740791'])
 +
-+/** Only commands that reproduce the same result from the same frozen inputs may repeat. */
++/**
++ * Only commands that reproduce the same result from the same inputs may repeat.
++ * A `--lockfile-only` resolution writes nothing but the staging lockfile from
++ * exact pinned identities (migration never resolves moving tags), so repeating
++ * a crashed resolution is the same as running it once.
++ */
 +export function isIdempotentPnpmCommand(args: readonly string[]): boolean {
 +  const [command] = args
 +  if (command === 'fetch') return true
++  if (args.includes('--lockfile-only')) return ['install', 'add', 'remove'].includes(String(command))
 +  return command === 'install' && args.includes('--frozen-lockfile')
 +}
 +
@@ -1396,7 +1402,7 @@ index b9b94f7..037461f 100644
      const value = readJson(this.paths.pending)
      if (!isRecord(value) || value.schemaVersion !== 1
        || typeof value.id !== 'string' || typeof value.stagingProfile !== 'string'
-@@ -355,11 +658,11 @@ export class DesktopProjectManager {
+@@ -355,11 +664,11 @@ export class DesktopProjectManager {
        step: value.step,
      }
      if (!existsSync(this.paths.profile) && existsSync(this.paths.rollback)) {
@@ -1410,7 +1416,7 @@ index b9b94f7..037461f 100644
    }
  
    /** Read the active desktop plugin inventory. */
-@@ -386,71 +689,366 @@ export class DesktopProjectManager {
+@@ -386,71 +695,366 @@ export class DesktopProjectManager {
  
    /** Read the release version applied to the active desktop project. */
    releaseVersion(): string {
@@ -1418,10 +1424,8 @@ index b9b94f7..037461f 100644
 -    return releaseFile(this.paths.profile).version
 +    const release = releaseFile(this.paths.profile)
 +    return release.productVersion ?? release.version
-   }
- 
--  /** Install or reconcile the active project to the Electron package's exact release. */
--  async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
++  }
++
 +  /** Runtime slot built ahead of the startup that activates it. */
 +  private get preparedRoot(): string { return join(this.paths.root, 'prepared') }
 +
@@ -1468,8 +1472,10 @@ index b9b94f7..037461f 100644
 +    const managedMatch = (target.managedPlugins ?? []).every(plugin =>
 +      manifest.dependencies[plugin.name] === undefined || this.installedPackageVersion(plugin.name) === plugin.version)
 +    return managedMatch && JSON.stringify(currentPackages) === JSON.stringify(targetPackages) && await this.usesBundledStore()
-+  }
-+
+   }
+ 
+-  /** Install or reconcile the active project to the Electron package's exact release. */
+-  async applyRelease(seedDir: string, electronVersion: string, hooks: DesktopProjectHooks): Promise<boolean> {
 +  /**
 +   * Install or reconcile the active project to the Electron package's exact release.
 +   * Startup only checks and starts: a runtime prepared by the installer or during a
@@ -1812,7 +1818,7 @@ index b9b94f7..037461f 100644
        }
      })
    }
-@@ -460,14 +1058,79 @@ export class DesktopProjectManager {
+@@ -460,14 +1064,79 @@ export class DesktopProjectManager {
      mkdirSync(path, { recursive: true, mode: 0o700 })
      return path
    }
@@ -1893,7 +1899,7 @@ index b9b94f7..037461f 100644
          const current = pluginRecords(projectDir).filter(plugin => plugin.name !== installed.name)
          writeProfilePlugins(
            projectDir,
-@@ -480,9 +1143,9 @@ export class DesktopProjectManager {
+@@ -480,9 +1149,9 @@ export class DesktopProjectManager {
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
          }
@@ -1904,7 +1910,7 @@ index b9b94f7..037461f 100644
          return
        }
        case 'plugin-update':
-@@ -490,9 +1153,9 @@ export class DesktopProjectManager {
+@@ -490,9 +1159,9 @@ export class DesktopProjectManager {
          assertVersion(mutation.version)
          if (!profilePluginNames(projectDir).includes(mutation.name)) {
            throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
@@ -1915,7 +1921,7 @@ index b9b94f7..037461f 100644
            const installed = inspectPlugin(projectDir, mutation.name)
            writeProfilePlugins(
              projectDir,
-@@ -504,20 +1167,29 @@ export class DesktopProjectManager {
+@@ -504,20 +1173,29 @@ export class DesktopProjectManager {
          mutation satisfies never
      }
    }
@@ -1950,7 +1956,7 @@ index b9b94f7..037461f 100644
        schemaVersion: 1,
        id: basename(dirname(stagingProfile)),
        stagingProfile,
-@@ -525,31 +1197,42 @@ export class DesktopProjectManager {
+@@ -525,31 +1203,42 @@ export class DesktopProjectManager {
      }
      writeJson(this.paths.pending, pending)
      await hooks.beforeActivate()
@@ -1999,7 +2005,7 @@ index b9b94f7..037461f 100644
      if (command === undefined) throw new Error('desktop project: pnpm command is required')
      for (const path of [this.paths.root, this.paths.pnpm.store, this.paths.pnpm.cache,
        this.paths.pnpm.state, this.paths.pnpm.config, this.paths.pnpm.home]) {
-@@ -559,9 +1242,9 @@ export class DesktopProjectManager {
+@@ -559,9 +1248,9 @@ export class DesktopProjectManager {
      if (!existsSync(npmrc)) writeFileSync(npmrc, '', { mode: 0o600 })
      const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => (
        !/^DSH_DESKTOP_/u.test(name) && !/^(?:npm|pnpm|corepack)_/iu.test(name)
@@ -2010,7 +2016,7 @@ index b9b94f7..037461f 100644
          this.runtime.pnpm,
          `--config.registry=${DESKTOP_REGISTRY}`,
          `--config.store-dir=${this.paths.pnpm.store}`,
-@@ -570,10 +1253,14 @@ export class DesktopProjectManager {
+@@ -570,10 +1259,14 @@ export class DesktopProjectManager {
          command,
          ...commandArgs,
        ], {
@@ -2025,7 +2031,7 @@ index b9b94f7..037461f 100644
            NPM_CONFIG_REGISTRY: DESKTOP_REGISTRY,
            NPM_CONFIG_STORE_DIR: this.paths.pnpm.store,
            NPM_CONFIG_USERCONFIG: npmrc,
-@@ -598,14 +1285,16 @@ export class DesktopProjectManager {
+@@ -598,14 +1291,16 @@ export class DesktopProjectManager {
          reject(errorOf(error, 'desktop project: failed to assign the package transaction lock to pnpm'))
          return
        }
@@ -2042,7 +2048,7 @@ index b9b94f7..037461f 100644
        child.stderr.on('data', appendDiagnostics)
        const complete = (settleChild: () => void): void => {
          if (completed) return
-@@ -621,14 +1310,12 @@ export class DesktopProjectManager {
+@@ -621,14 +1316,12 @@ export class DesktopProjectManager {
        child.once('error', (error) => { complete(() => { reject(error) }) })
        child.once('close', (code, signal) => {
          complete(() => {
@@ -2059,7 +2065,7 @@ index b9b94f7..037461f 100644
        })
      })
    }
-@@ -689,15 +1376,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
+@@ -689,15 +1382,16 @@ export function createSeedMetadata(seedDir: string, release: DesktopRelease): vo
    const manifest: DesktopProjectManifest = {
      name: PROJECT_NAME,
      private: true,
@@ -2819,7 +2825,7 @@ index d3a08d7..fdc9cc1 100644
  const bodies = new Map()
  process.send({ type: 'ready', protocolVersion: 3, dshVersion: process.env.NODE_OPTIONS ?? 'clean' })
 diff --git a/apps/desktop/tests/project-manager.spec.ts b/apps/desktop/tests/project-manager.spec.ts
-index 27ac24f..204324d 100644
+index 27ac24f..fdeda4b 100644
 --- a/apps/desktop/tests/project-manager.spec.ts
 +++ b/apps/desktop/tests/project-manager.spec.ts
 @@ -7,16 +7,21 @@ import { afterEach, describe, expect, it } from 'vitest'
@@ -3240,7 +3246,7 @@ index 27ac24f..204324d 100644
    })
  
    it('reconciles dsh to the packaged release without removing desktop plugins', async () => {
-@@ -407,4 +737,292 @@ describe('desktop project transactions', () => {
+@@ -407,4 +737,302 @@ describe('desktop project transactions', () => {
      expect(readFileSync(join(paths.pnpm.store, 'release-2'), 'utf8')).toBe('two')
      await expect(manager.applyRelease(nextSeed, '1.1.0', hooks())).resolves.toBe(false)
    })
@@ -3399,8 +3405,15 @@ index 27ac24f..204324d 100644
 +    expect(warnings[0]).toContain('0xC0000409')
 +  })
 +
++  it('repeats a crashed lockfile-only resolution once', async () => {
++    let runs = 0
++    await expect(retryNativeFailFast(['add', '@fixture/a@1.0.0', '--save-exact', '--lockfile-only'], async () => {
++      runs += 1; if (runs === 1) throw crash(); return 'ok' }, () => {})).resolves.toBe('ok')
++    expect(runs).toBe(2)
++  })
++
 +  it('does not repeat mutations, other failures or a second crash', async () => {
-+    for (const args of [['add', '@fixture/a@1.0.0', '--lockfile-only'], ['remove', '@fixture/a'], ['install']]) {
++    for (const args of [['add', '@fixture/a@1.0.0'], ['remove', '@fixture/a'], ['install']]) {
 +      let runs = 0
 +      await expect(retryNativeFailFast(args, async () => { runs += 1; throw crash() }, () => {})).rejects.toBeInstanceOf(PnpmCommandError)
 +      expect(runs).toBe(1)
@@ -3412,7 +3425,10 @@ index 27ac24f..204324d 100644
 +    await expect(retryNativeFailFast(['fetch'], async () => { runs += 1; throw crash() }, () => {})).rejects.toThrow('after one repeat of a native fail-fast 0xC0000409 exit')
 +    expect(runs).toBe(2)
 +    expect(isIdempotentPnpmCommand(['install', '--frozen-lockfile'])).toBe(true)
-+    expect(isIdempotentPnpmCommand(['install', '--lockfile-only'])).toBe(false)
++    expect(isIdempotentPnpmCommand(['install', '--lockfile-only'])).toBe(true)
++    expect(isIdempotentPnpmCommand(['add', '@agentrouter-top/dsh-codex@0.16.2', '--lockfile-only'])).toBe(true)
++    expect(isIdempotentPnpmCommand(['add', '@agentrouter-top/dsh-codex@0.16.2'])).toBe(false)
++    expect(isIdempotentPnpmCommand(['install'])).toBe(false)
 +  })
 +})
 +

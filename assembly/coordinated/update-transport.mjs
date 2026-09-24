@@ -27,9 +27,15 @@ const STALL_MS = 60000
  */
 export function downloadSources(value) {
   const url = String(value)
+  // electron-updater appends a cache-busting query (`latest.yml?noCache=...`);
+  // 3.0.20/3.0.21 compared the full URL, so the feed never used the mirror and
+  // could not even check for updates where GitHub is blocked. Match the path.
+  let bare
+  try { const parsed = new URL(url); bare = parsed.origin + parsed.pathname } catch { return [url] }
   // The moving feed: the mirror's copy may lag GitHub briefly, never the reverse.
-  if (url === `${RELEASES}latest/download/latest.yml`) return [`${MIRROR_BASE}latest.yml`, url]
-  const match = ASSET.exec(url)
+  // The mirror copy is short-TTL at the edge; its cache key omits the random query.
+  if (bare === `${RELEASES}latest/download/latest.yml`) return [`${MIRROR_BASE}latest.yml`, url]
+  const match = ASSET.exec(bare)
   if (!match) return [url]
   const file = match[2]
   const version = match[1] ?? VERSIONED_FILE.exec(file)?.[1]
@@ -198,7 +204,7 @@ export function installResilientTransport(updater, { fetcher, differentialAttemp
   executor.createRequest = (options, callback) => {
     const url = optionsUrl(options)
     const sources = url ? downloadSources(url) : []
-    if (state.mirrorRanges && sources.length === 2 && /\.exe$/i.test(url) && url.startsWith(RELEASES)) {
+    if (state.mirrorRanges && sources.length === 2 && /\.exe$/i.test(new URL(url).pathname) && url.startsWith(RELEASES)) {
       return createRequest(onSource(options, sources[0]), callback)
     }
     return createRequest(options, callback)
