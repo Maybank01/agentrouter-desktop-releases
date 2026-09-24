@@ -23,8 +23,15 @@ const github = 'https://github.com/Maybank01/agentrouter-desktop-releases/releas
 const sha = (bytes, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(bytes).digest(encoding)
 
 async function bytesOf(url, fetcher, timeoutMs = 600_000) {
-  const response = await fetcher(url, { redirect: 'follow', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) })
-  return { status: response.status, headers: response.headers, bytes: response.status === 200 ? Buffer.from(await response.arrayBuffer()) : undefined }
+  // One bounded retry for a dropped connection ("terminated") on the 300 MB installer.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetcher(url, { redirect: 'follow', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) })
+      return { status: response.status, headers: response.headers, bytes: response.status === 200 ? Buffer.from(await response.arrayBuffer()) : undefined }
+    } catch (error) {
+      if (attempt >= 2) throw error
+    }
+  }
 }
 
 /** Expected files of one version from its GitHub release (the source of truth). */
@@ -44,7 +51,7 @@ export function mirrorPlan(version, assets) {
 }
 
 export async function verifyMirror({ version, assets, fetcher = fetch, sleep = ms => new Promise(done => setTimeout(done, ms)),
-  now = Date.now, timeoutMs = 10 * 60_000, intervalMs = 15_000 }) {
+  now = Date.now, timeoutMs = 10 * 60_000, intervalMs = 15_000, feed = true }) {
   const plan = mirrorPlan(version, assets)
   const result = { version, versioned: [], feed: [] }
   // 1. Versioned bytes first (this also warms the mirror before its feed moves).
@@ -62,6 +69,7 @@ export async function verifyMirror({ version, assets, fetcher = fetch, sleep = m
     result.versioned.push({ name: file.name, sha256: file.sha256, cache: fetched.headers.get('cf-cache-status'), cacheControl: fetched.headers.get('cache-control'),
       ...(file.name.endsWith('.exe') ? { sha512: sha(fetched.bytes, 'sha512', 'base64') } : {}) })
   }
+  if (!feed) return { ...result, verified: true, feed: 'not checked (older version)' }
   // 2. The feed must then converge to GitHub's exact bytes for this version.
   const started = now()
   for (const file of plan.feed) {
@@ -89,7 +97,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const release = await (await fetch(`https://api.github.com/repos/Maybank01/agentrouter-desktop-releases/releases/tags/v${version}`,
       { headers: { accept: 'application/vnd.github+json', ...(process.env.GH_TOKEN ? { authorization: `Bearer ${process.env.GH_TOKEN}` } : {}) } })).json()
-    outcome = await verifyMirror({ version, assets: release.assets })
+    outcome = await verifyMirror({ version, assets: release.assets, feed: !process.argv.includes('--versioned-only') })
   } catch (error) {
     outcome = { version, verified: false, error: String(error?.message ?? error).slice(0, 300) }
   }
