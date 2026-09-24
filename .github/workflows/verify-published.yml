@@ -6,8 +6,8 @@ permissions:
   contents: read
 concurrency: { group: verify-published, cancel-in-progress: true }
 env:
-  FROM_VERSION: '3.0.18'
-  TO_VERSION: '3.0.19'
+  FROM_VERSION: '3.0.19'
+  TO_VERSION: '3.0.20'
 jobs:
   verify:
     strategy:
