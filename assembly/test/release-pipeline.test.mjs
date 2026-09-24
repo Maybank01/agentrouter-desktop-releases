@@ -80,3 +80,24 @@ test('release tooling does not change the installed-acceptance inputs', () => {
   for (const path of ['assembly/wait-plugin.mjs', 'assembly/release-timeline.mjs', 'assembly/release-budgets.json']) assert.equal(requiresInstalledAcceptance([path]), false, path)
   assert.equal(requiresInstalledAcceptance(['assembly/coordinated/release.json']), true)
 })
+
+test('mirror verification follows the client layout and rejects differing bytes', async () => {
+  const { mirrorPlan, verifyMirror, mirrorBase } = await import('../mirror-verify.mjs')
+  const files = { 'AgentRouter-3.0.20-x64-Setup.exe': Buffer.from('installer'), 'AgentRouter-3.0.20-x64-Setup.exe.blockmap': Buffer.from('blockmap'),
+    'agentrouter-update.json': Buffer.from('{"signed":true}') }
+  const sha512 = createHash('sha512').update(files['AgentRouter-3.0.20-x64-Setup.exe']).digest('base64')
+  files['latest.yml'] = Buffer.from(`version: 3.0.20\nsha512: ${sha512}\n`)
+  const assets = Object.entries(files).map(([name, body]) => ({ name, size: body.length, digest: `sha256:${createHash('sha256').update(body).digest('hex')}` }))
+  const plan = mirrorPlan('3.0.20', assets)
+  assert.deepEqual(plan.versioned.map(file => file.url.slice(mirrorBase.length)), ['/v3.0.20/AgentRouter-3.0.20-x64-Setup.exe',
+    '/v3.0.20/AgentRouter-3.0.20-x64-Setup.exe.blockmap', '/v3.0.20/agentrouter-update.json'])
+  assert.deepEqual(plan.feed.map(file => file.url.slice(mirrorBase.length)), ['/latest.yml'])
+  const served = (overrides = {}) => async url => {
+    const name = url.split('/').at(-1), body = overrides[name] ?? files[name]
+    return body ? { status: 200, headers: new Headers(), arrayBuffer: async () => body } : { status: 404, headers: new Headers() }
+  }
+  const quick = { sleep: async () => {}, timeoutMs: 1, intervalMs: 1 }
+  assert.equal((await verifyMirror({ version: '3.0.20', assets, fetcher: served(), ...quick })).verified, true)
+  await assert.rejects(verifyMirror({ version: '3.0.20', assets, fetcher: served({ 'AgentRouter-3.0.20-x64-Setup.exe.blockmap': Buffer.from('blockmaX') }), ...quick }), /bytes differ/)
+  await assert.rejects(verifyMirror({ version: '3.0.20', assets, fetcher: served({ 'latest.yml': Buffer.from('version: 3.0.19\n') }), ...quick }), /did not converge/)
+})

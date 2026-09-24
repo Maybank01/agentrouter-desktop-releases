@@ -570,6 +570,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node assembly/coordinated-release.mjs publish .local/signed-release
+      - name: Warm and verify the website download mirror (installer, blockmap, manifest, then latest.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Report-only until the Cloud mirror route serves blockmaps and the feed; then set to 'true'.
+          MIRROR_REQUIRED: 'false'
+        run: node assembly/mirror-verify.mjs
   coordinated_outcome:
     name: Require the requested publication
     # A requested publication must never report success while any gate was
