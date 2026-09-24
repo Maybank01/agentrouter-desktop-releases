@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Per-job wall-clock budgets (minutes) for release.yml. A breach is written to the run summary and receipt and opens an incident issue; it never retries or hides the stage.",
+  "description": "Per-job wall-clock budgets (minutes) for release.yml. A breach is written to the run summary and receipt and opens an incident issue; it never retries or hides the stage. The update-from-published-versions matrix runs in parallel after signing (old baselines build their runtime on first launch, 4-15 min per cell); totals include it.",
   "jobs": {
     "Select reusable installed acceptance evidence": 4,
     "Accept coordinated installers before signing": 30,
@@ -15,7 +15,7 @@
   },
   "queueMinutes": 3,
   "totalMinutes": {
-    "hotfix": 23,
-    "standard": 30
+    "hotfix": 35,
+    "standard": 45
   }
 }
