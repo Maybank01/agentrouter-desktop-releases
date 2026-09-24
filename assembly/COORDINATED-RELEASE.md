@@ -240,3 +240,62 @@ Limits: clients <= 3.0.20 always follow `latest.yml`, so pausing only holds back
 release needs a newer fixed version (latest never moves backwards). Once the
 fixed version is published, clients that did not take the bad one skip to it,
 since the rollout file names only one version and any other version fails open.
+
+## 2026-09-24: update path matrix (update from old published versions)
+
+`coordinated_update_matrix` calls `.github/workflows/update-matrix.yml` on the
+staged draft in parallel with the other signed checks; `coordinated_publish`
+needs it for every profile (hotfix included) and signed recovery requires the
+original run's matrix result. Each cell runs on its own disposable windows-2025
+worker: it downloads the REAL published installer of a baseline (SHA-256 checked
+against the release record), installs it silently per-user, starts it with the
+worker's default Home, seeds a connected session and conversation, and updates
+it through the product's own update routes (`updates/check`, `download`,
+`install`, as the update page does). It then requires the restarted candidate to
+become ready and a relaunch to keep the credential, conversation and
+`cordis.patch.yml`.
+
+Installed apps keep their baked-in GitHub feed and pinned update key, so the
+cell serves GitHub Releases (`releases/latest/download/`, tag downloads with
+their `release-assets.githubusercontent.com` redirect) and the
+`agentrouter.top/downloads/desktop/` mirror from a local HTTPS server: the hosts
+file maps those names to 127.0.0.1 and a two-day test CA is trusted in
+LocalMachine\Root (Chromium) and through `NODE_EXTRA_CA_CERTS` (Node fetch) on
+that worker only; the cell restores both afterwards. This never changes the
+product, its feed or its signature verification. Every connection and request is
+in the cell's `requests.json` artifact.
+
+| Mode | Network | Expected |
+| --- | --- | --- |
+| `normal` | GitHub and mirror reachable | pass |
+| `github-blocked` | direct TLS to github.com / *.githubusercontent.com is reset | <=3.0.19: known failure at check/download; 3.0.20/3.0.21: known failure at check (see below); 3.0.22+: pass via the mirror |
+| `system-proxy` | GitHub only through the Windows system proxy (Chromium); direct connections reset | <=3.0.19: known failure at download (their pinned verifier fetches `agentrouter-update.json` with Node's fetch, the 3.0.14 -> 3.0.20 field failure); >=3.0.20: pass |
+| `faults` (newest baseline only) | normal, one installer transfer dropped midway; if the baseline prepared the next runtime, its first start is made to fail | the update completes (<=3.0.19 after one user retry, >=3.0.20 without); a failed prepared runtime falls back to the previous Profile and ends usable |
+
+Default baselines: 3.0.14, 3.0.17, 3.0.19, 3.0.20 and the latest two published
+formal versions below the candidate. A known failure passes the gate only at
+its documented step and only if the old installation stays intact; any other
+failure, or a missing cell, fails it. The result job writes the baseline x mode
+table to the run summary and attaches `update-matrix.json` to the draft.
+
+Found by the matrix (2026-09-24): 3.0.20 and 3.0.21 cannot check for updates when
+GitHub is blocked. electron-updater requests `latest.yml?noCache=<random>` and
+`update-transport.mjs` matches the feed URL exactly, so the feed never goes
+mirror-first (the manifest, blockmaps and installer do). An installed baseline's
+check cannot be fixed by a newer candidate, so this is a documented known failure
+for those two baselines. The adapter fix (agentrouter-desktop#58) ships in 3.0.22
+(`mirrorFeedFixedIn` in `assembly/update-matrix/plan.mjs`); 3.0.22+ must pass.
+
+Old baselines build their runtime on their first launch (3-9 minutes on hosted
+workers; their installers do not prepare it), so a cell takes 6-13 minutes. If
+that first run of the old release fails on its own (3.0.17 was seen failing with
+EBUSY removing a staging profile), the cell reopens it once, as a user would, and
+records `baselineFirstLaunchRetry`. The update path itself is never retried,
+except the one user "continue download" that <=3.0.19 need after a dropped
+transfer in the `faults` cell (recorded as `interruptionRetry`).
+
+Rehearse against an already published release (no signing, no draft):
+
+```text
+gh workflow run update-matrix.yml --repo Maybank01/agentrouter-desktop-releases --ref main -f candidate_tag=v3.0.20 -f baselines=3.0.14,3.0.17,3.0.19
+```

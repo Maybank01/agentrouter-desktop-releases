@@ -19,7 +19,7 @@ test('the public release repository contains assembly inputs, not product source
 
 test('optional Desktop publication is manually dispatched on main and never follows npm automatically', () => {
   const directory = join(root, '.github/workflows')
-  assert.deepEqual(readdirSync(directory).sort(), ['ci.yml', 'plugin-validation.yml', 'release.yml', 'rollout.yml'])
+  assert.deepEqual(readdirSync(directory).sort(), ['ci.yml', 'plugin-validation.yml', 'release.yml', 'rollout.yml', 'update-matrix.yml'])
   const ci = readFileSync(join(directory, 'ci.yml'), 'utf8')
   assert.match(ci, /contents: read/)
   assert.match(ci, /workflow_dispatch:/)
@@ -98,7 +98,7 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
   const lane = workflow.split('\n  # Coordinated lane:')[1]
   const jobs = Object.fromEntries(lane.split(/\n  (?=[a-z_]+:\r?\n)/).slice(1).map(body => [body.slice(0, body.indexOf(':')), body]))
   assert.deepEqual(Object.keys(jobs), ['coordinated_evidence', 'coordinated', 'coordinated_sign', 'coordinated_signed_baseline', 'coordinated_signed_update',
-    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_feed_compat', 'coordinated_publish', 'coordinated_outcome', 'coordinated_timeline', 'coordinated_run_drafts'])
+    'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_feed_compat', 'coordinated_update_matrix', 'coordinated_publish', 'coordinated_outcome', 'coordinated_timeline', 'coordinated_run_drafts'])
   // A signed rehearsal stages a never-published draft and can never publish.
   assert.match(workflow, /rehearse_signed:\r?\n        description: [^\n]*requires publish=false/)
   assert.match(workflow, /AGENTROUTER_REHEARSAL: \$\{\{ inputs\.rehearse_signed && '1' \|\| '' \}\}/)
@@ -135,6 +135,19 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
   assert.match(jobs.coordinated_outcome, /needs: \[[^\]]*coordinated_publish\]/)
   assert.match(jobs.coordinated_outcome, /PUBLISH_RESULT" != "success"/)
   delete jobs.coordinated_outcome
+  // The update path matrix is a reusable-workflow gate on the staged draft, hotfix included.
+  assert.match(jobs.coordinated_update_matrix, /needs: coordinated_sign\r?\n/)
+  assert.match(jobs.coordinated_update_matrix, /if: \$\{\{ !cancelled\(\) && needs\.coordinated_sign\.result == 'success' \}\}/)
+  assert.match(jobs.coordinated_update_matrix, /uses: \.\/\.github\/workflows\/update-matrix\.yml/)
+  assert.match(jobs.coordinated_update_matrix, /candidate_tag: \$\{\{ needs\.coordinated_sign\.outputs\.tag \}\}/)
+  assert.match(jobs.coordinated_update_matrix, /release_run: true/)
+  assert.doesNotMatch(jobs.coordinated_update_matrix, /secrets|environment:|profile/)
+  // The timeline job (already removed from `jobs`) also waits for the matrix.
+  assert.match(workflow, /coordinated_update_matrix, coordinated_publish\]\r?\n    if: \$\{\{ always\(\) && github\.event_name == 'workflow_dispatch' && inputs\.delivery == 'coordinated' \}\}/)
+  for (const name of ['coordinated_publish', 'coordinated_run_drafts']) {
+    assert.match(jobs[name], /needs: \[[^\]]*coordinated_update_matrix/, name)
+  }
+  delete jobs.coordinated_update_matrix
   for (const [name, body] of Object.entries(jobs)) {
     assert.equal((body.match(/uses: actions\/checkout@/g) ?? []).length, 1, name)
     assert.equal((body.match(/persist-credentials: false/g) ?? []).length, 1, name)
@@ -157,8 +170,8 @@ test('coordinated release reuses exact-input evidence and runs signed checks in 
     assert.match(jobs[name], /gh release download "\$env:RELEASE_TAG"/)
     assert.match(jobs[name], /node assembly\/coordinated-release\.mjs record \.local\/signed-release /)
   }
-  assert.match(jobs.coordinated_publish, /needs: \[coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat\]/)
-  for (const name of ['coordinated_sign', 'coordinated_signed_update', 'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_feed_compat']) {
+  assert.match(jobs.coordinated_publish, /needs: \[coordinated_sign, coordinated_signed_update, coordinated_signed_legacy, coordinated_signed_install, coordinated_feed_compat, coordinated_update_matrix\]/)
+  for (const name of ['coordinated_sign', 'coordinated_signed_update', 'coordinated_signed_legacy', 'coordinated_signed_install', 'coordinated_feed_compat', 'coordinated_update_matrix']) {
     assert.match(jobs.coordinated_publish, new RegExp(`needs\\.${name}\\.result == 'success'`), name)
   }
   assert.match(jobs.coordinated_publish, /node assembly\/coordinated-recovery\.mjs/)

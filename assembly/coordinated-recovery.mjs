@@ -17,7 +17,10 @@ export const releaseJobs = {
   signedUpdate: 'Signed native update and restart',
   signedLegacy: 'Signed legacy Profile migration',
   signedInstall: 'Install signed bytes on a clean worker',
+  updateMatrix: 'Update path matrix',
 }
+/** Reusable-workflow jobs are named "<caller job> / <called job>". */
+export const updateMatrixResultJob = `${releaseJobs.updateMatrix} / Update path matrix result`
 
 export function requiredRecoveryJobs(receipt) {
   if (receipt.schemaVersion === 1) return [releaseJobs.candidate, releaseJobs.sign]
@@ -57,6 +60,12 @@ export function validateSignedRecovery({ run, jobs, receipt, input, adapterSourc
     assert.equal(receipt.installedSignedUpdate.installerRestartedApp, true)
     assert.equal(receipt.installedSignedUpdate.rootTrustInstalled, false)
     assert.equal(receipt.installedSignedUpdate.signedInstallerSha256, installers[0].sha256)
+  }
+  // Runs that carried the update path matrix must have passed it; older runs predate it.
+  if (jobs.some(job => job.name === releaseJobs.updateMatrix || job.name.startsWith(releaseJobs.updateMatrix + ' / '))) {
+    const results = jobs.filter(job => job.name === updateMatrixResultJob)
+    assert.equal(results.length, 1, 'The original update path matrix did not produce its result')
+    assert.equal(results[0].conclusion, 'success', 'The original update path matrix must have passed')
   }
   for (const name of requiredRecoveryJobs(receipt)) {
     const matches = jobs.filter(job => job.name === name)

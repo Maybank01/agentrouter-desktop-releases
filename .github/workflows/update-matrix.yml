@@ -1,0 +1,153 @@
+name: Update path matrix
+
+# Update from old published versions: the REAL published installer of each
+# field baseline is installed on its own disposable Windows worker and updated
+# to the candidate through the product's own updater, with GitHub and the
+# agentrouter.top mirror served locally under a network mode. release.yml calls
+# this after signing; publication needs it. It can also rehearse against an
+# already published release. See assembly/COORDINATED-RELEASE.md.
+on:
+  workflow_call:
+    inputs:
+      candidate_tag:
+        description: Release tag holding the candidate (a staged draft, rehearsal-<run>, or a published vX.Y.Z)
+        type: string
+        required: true
+      candidate_version:
+        description: Optional expected candidate version (checked against its latest.yml)
+        type: string
+        default: ''
+      baselines:
+        description: Comma-separated published baselines (default 3.0.14, 3.0.17, 3.0.19, 3.0.20 and the latest two formal versions below the candidate)
+        type: string
+        default: ''
+      modes:
+        description: Comma-separated network modes (default normal, github-blocked, system-proxy)
+        type: string
+        default: ''
+      faults:
+        description: Add the interruption/rollback cell for the newest baseline
+        type: boolean
+        default: true
+      release_run:
+        description: Called by release.yml; the candidate must be this commit's product version and the result is attached to the draft
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Release tag holding the candidate (a published vX.Y.Z or a draft visible to this repository)
+        type: string
+        required: true
+      candidate_version:
+        description: Optional expected candidate version
+        type: string
+        default: ''
+      baselines:
+        description: Comma-separated published baselines (empty = default policy)
+        type: string
+        default: ''
+      modes:
+        description: Comma-separated network modes (empty = normal, github-blocked, system-proxy)
+        type: string
+        default: ''
+      faults:
+        description: Add the interruption/rollback cell for the newest baseline
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan the update path matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Staged drafts are visible only to repository writers.
+      contents: write
+    outputs:
+      candidate: ${{ steps.plan.outputs.candidate }}
+      tag: ${{ steps.plan.outputs.tag }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.15.0
+      - id: plan
+        name: Resolve the candidate and the published baselines
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          BASELINES: ${{ inputs.baselines }}
+          MODES: ${{ inputs.modes }}
+          FAULTS: ${{ inputs.faults }}
+          EXPECT_RELEASE_JSON: ${{ inputs.release_run }}
+        run: node assembly/update-matrix/plan.mjs
+
+  cell:
+    name: Update ${{ matrix.baseline }} (${{ matrix.mode }})
+    needs: plan
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - run: node assembly/retry-install.mjs npm ci --ignore-scripts --prefix assembly/coordinated
+      - name: Update the published baseline to the candidate through the product updater
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE: ${{ matrix.baseline }}
+          MODE: ${{ matrix.mode }}
+          CANDIDATE: ${{ needs.plan.outputs.candidate }}
+          CANDIDATE_TAG: ${{ needs.plan.outputs.tag }}
+        shell: pwsh
+        run: node assembly/update-matrix/run.mjs "--baseline=$env:BASELINE" "--mode=$env:MODE" "--candidate=$env:CANDIDATE" "--candidate-tag=$env:CANDIDATE_TAG" "--out=$env:RUNNER_TEMP/update-matrix-cell"
+      - name: Preserve the cell record, request log and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: update-matrix-${{ matrix.baseline }}-${{ matrix.mode }}
+          path: ${{ runner.temp }}/update-matrix-cell
+          retention-days: 14
+          if-no-files-found: warn
+
+  result:
+    name: Update path matrix result
+    needs: [plan, cell]
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.15.0
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: update-matrix-*
+          path: ${{ runner.temp }}/update-matrix-cells
+      - name: Write the baseline x mode table and require every gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN: ${{ needs.plan.outputs.plan }}
+          RECORD_TAG: ${{ inputs.release_run && inputs.candidate_tag || '' }}
+        run: node assembly/update-matrix/aggregate.mjs "$RUNNER_TEMP/update-matrix-cells" "$RUNNER_TEMP/update-matrix.json"

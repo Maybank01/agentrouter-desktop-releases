@@ -9,6 +9,8 @@ export function requiresInstalledAcceptance(paths) {
     if (/\.(md|txt)$/.test(path) || /^(docs\/|\.github\/ISSUE_TEMPLATE\/)/.test(path)) return false
     if (/^assembly\/(test\/|plugin-ci\/|coordinated-(website|public|recovery)\.mjs$|ci-scope\.mjs$|feed-compat\.mjs$|rollout\.mjs$|wait-plugin\.mjs$|mirror-verify\.mjs$|release-timeline\.mjs$|release-budgets\.json$)/.test(path)) return false
     if (path === '.github/workflows/plugin-validation.yml' || path === '.github/workflows/rollout.yml') return false
+    // The update path matrix installs published bytes only; it is a release gate, not a product input.
+    if (path.startsWith('assembly/update-matrix/') || path === '.github/workflows/update-matrix.yml') return false
     return true
   })
 }

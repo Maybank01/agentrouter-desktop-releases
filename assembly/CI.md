@@ -144,3 +144,16 @@ native fail-fast crash that prints no error). The exported `build.mjs` applies
 the same single retry to its seed `pnpm install --lockfile-only` and
 `pnpm fetch --prod`, and the thrown error carries the pnpm stderr/stdout tails.
 A retry that succeeds is shown as a workflow warning, not hidden.
+
+## 2026-09-24: update path matrix
+
+`update-matrix.yml` is a release gate, not part of ci.yml: it needs a signed
+candidate (a staged draft or a published release) and published baselines.
+`release.yml` calls it after signing; it can be dispatched for any published
+tag (`-f candidate_tag=vX.Y.Z`, optional `baselines`, `modes`, `faults`). The
+harness lives in `assembly/update-matrix/` (not the exported adapter); it reuses
+the adapter's installed-version and process-exit helpers and its Playwright.
+Its unit tests (`assembly/test/update-matrix.test.mjs`, part of `npm test`)
+cover the plan, the GitHub/mirror routing, SNI resets, the proxy and the result
+table. `ci-scope.mjs` treats these files as non-product inputs. Cell details,
+modes and expectations: `COORDINATED-RELEASE.md`.
