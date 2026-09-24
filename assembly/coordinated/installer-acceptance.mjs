@@ -27,8 +27,12 @@ const baselinePackageDir = option('baseline-package')
 const targetFile = resolve(process.argv[2])
 const target = json(targetFile)
 /** The native-update baseline: the pinned old product with the target's exact plugin (and signing identity). */
-const baselineInputFor = (input, signed) => ({ ...json(join(directory, 'installer-baseline.json')), plugin: input.plugin,
-  ...(signed ? { signing: input.signing } : {}) })
+// The recorded preceding plugin makes the native update change the runtime;
+// without one the baseline keeps the target's plugin.
+const baselineInputFor = (input, signed) => {
+  const recorded = json(join(directory, 'installer-baseline.json'))
+  return { ...recorded, plugin: recorded.plugin ?? input.plugin, ...(signed ? { signing: input.signing } : {}) }
+}
 const signedReceiptFile = process.argv.find(value => value.startsWith('--signed-installer='))?.slice('--signed-installer='.length)
 // Each scenario installs the target on its own disposable worker so CI can run
 // them in parallel. Without --scenario the release path keeps its full sequence:
@@ -119,7 +123,7 @@ function loadPrebuiltBaseline(dir) {
   const receipt = manifest.package
   assert.equal(receipt.testOnly, true); assert.equal(receipt.signed, true); assert.equal(receipt.feed, signedBaselineFeed)
   assert.equal(receipt.productVersion, manifest.input.productVersion)
-  assert.deepEqual(receipt.plugin, target.input.plugin)
+  assert.deepEqual(receipt.plugin, manifest.input.plugin)
   assert.equal(receipt.patchSha256, target.patchSha256)
   assert.equal(basename(receipt.installer), receipt.installer)
   for (const file of receipt.assets) {
@@ -144,10 +148,11 @@ if (nativeUpdater && baselinePackageDir) {
   baseline = prebuiltBaseline.candidate
   mkdirSync(baseline.output, { recursive: true })
 } else if (nativeUpdater) {
-  // Native-update acceptance uses identical plugin/runtime inputs to prove shell
-  // updates retain the active graph, so the baseline always takes the target's
-  // plugin. The legacy installer still exercises a real old-plugin migration,
-  // including stale registry metadata.
+  // A product update normally ships another managed plugin: the baseline takes the
+  // recorded preceding plugin, so the restart must activate a runtime prepared in
+  // the background. Without a recorded plugin (or when it equals the target's) the
+  // same run proves an identical runtime is retained. The legacy installer still
+  // exercises a real old-plugin migration, including stale registry metadata.
   const baselineInput = baselineInputFor(target.input, Boolean(signedTarget))
   assert.equal(baselineInput.dshVersion, target.input.dshVersion)
   const baselineInputFile = join(work, signedTarget ? 'signed-baseline-input.json' : 'baseline-input.json')
