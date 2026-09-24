@@ -1,0 +1,35 @@
+name: Verify published client (temporary)
+on:
+  push:
+    branches: [verify/desktop-3.0.20]
+permissions:
+  contents: read
+concurrency: { group: verify-published, cancel-in-progress: true }
+env:
+  FROM_VERSION: '3.0.18'
+  TO_VERSION: '3.0.19'
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [fresh, update]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: npm install --no-save --no-package-lock playwright-core@1.55.0
+        working-directory: verify
+      - name: Verify
+        working-directory: verify
+        shell: pwsh
+        env: { OUT: '${{ runner.temp }}/verify-out' }
+        run: |
+          if ('${{ matrix.scenario }}' -eq 'fresh') { node published-client.mjs fresh $env:TO_VERSION } else { node published-client.mjs update $env:FROM_VERSION $env:TO_VERSION }
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/verify-out
