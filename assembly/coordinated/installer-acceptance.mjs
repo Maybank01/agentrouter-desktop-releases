@@ -3,19 +3,36 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, join, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { directory, root } from './prepare.mjs'
+import { inspectWindowsSignature, loadSigningPolicy } from './windows-signing.mjs'
 
 assert.equal(process.platform, 'win32')
 assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Run installers only on a disposable hosted Windows worker')
 assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted')
 const json = path => JSON.parse(readFileSync(path, 'utf8'))
 const writeJson = (path, data) => writeFileSync(path, JSON.stringify(data, null, 2) + '\n')
+const option = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
+// A signed loopback baseline can be produced once per release run on its own
+// worker (--prepare-baseline, from the reviewed release input) and reused by the
+// signed native update (--baseline-package). Its feed is baked into the signed
+// bytes, so both use this fixed loopback port instead of an ephemeral one.
+const SIGNED_BASELINE_FEED_PORT = 47831
+const signedBaselineFeed = `http://127.0.0.1:${SIGNED_BASELINE_FEED_PORT}/`
+const prepareBaseline = option('prepare-baseline')
+const baselinePackageDir = option('baseline-package')
 const targetFile = resolve(process.argv[2])
 const target = json(targetFile)
+/** The native-update baseline: the pinned old product with the target's exact plugin (and signing identity). */
+// The recorded preceding plugin makes the native update change the runtime;
+// without one the baseline keeps the target's plugin.
+const baselineInputFor = (input, signed) => {
+  const recorded = json(join(directory, 'installer-baseline.json'))
+  return { ...recorded, plugin: recorded.plugin ?? input.plugin, ...(signed ? { signing: input.signing } : {}) }
+}
 const signedReceiptFile = process.argv.find(value => value.startsWith('--signed-installer='))?.slice('--signed-installer='.length)
 // Each scenario installs the target on its own disposable worker so CI can run
 // them in parallel. Without --scenario the release path keeps its full sequence:
@@ -31,6 +48,8 @@ const acceptanceState = selected.has('fresh-install-recovery') && !selected.has(
   : undefined
 const nativeUpdater = selected.has('native-updater')
 const signedTarget = signedReceiptFile ? json(resolve(signedReceiptFile)) : undefined
+assert.ok(!baselinePackageDir || (signedTarget && nativeUpdater), 'A prebuilt baseline is only used by the signed native update')
+assert.ok(!prepareBaseline || (!signedTarget && !scenario), 'Preparing the baseline runs no scenario')
 if (signedTarget) {
   assert.equal(signedTarget.signed, true)
   assert.equal(signedTarget.testOnly, false)
@@ -61,16 +80,80 @@ async function run(exe, args, name, overrides = {}) {
 }
 const node = (script, args, name, overrides) => run(process.execPath, [join(directory, script), ...args], name, overrides)
 const lastResult = log => JSON.parse(readFileSync(log, 'utf8').trim().split(/\r?\n/).at(-1))
-let baselineFile, baseline
-if (nativeUpdater) {
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
+if (prepareBaseline) {
+  // argv[2] is the reviewed release input (release.json); only its plugin and
+  // signing identity enter the baseline. The result is test-only: its feed is
+  // loopback, it is never a release asset, and the consumer re-verifies it.
+  const input = target
+  assert.equal(input.schemaVersion, 1)
+  assert.equal(input.signing?.mode, 'self-signed', 'Only the self-signed product has a signed native-update baseline')
+  const baselineInput = baselineInputFor(input, true)
+  assert.equal(baselineInput.dshVersion, input.dshVersion)
+  const baselineInputFile = join(work, 'signed-baseline-input.json')
+  writeJson(baselineInputFile, baselineInput)
+  const candidateFile = lastResult(await node('build.mjs', [baselineInputFile], 'build-baseline')).candidate
+  const candidate = json(candidateFile)
+  const packaged = json(lastResult(await node('package-installer.mjs', [candidateFile, '--signed-test-feed=' + signedBaselineFeed], 'package-baseline')).installerReceipt)
+  assert.equal(packaged.testOnly, true); assert.equal(packaged.signed, true); assert.equal(packaged.feed, signedBaselineFeed)
+  const destination = resolve(prepareBaseline)
+  mkdirSync(destination, { recursive: true })
+  for (const file of packaged.assets) copyFileSync(join(packaged.output, file.name), join(destination, file.name))
+  const manifest = { schemaVersion: 1, kind: 'signed-loopback-native-update-baseline', testOnly: true, feed: signedBaselineFeed,
+    input: baselineInput, candidate: { input: candidate.input, patchSha256: candidate.patchSha256, upstreamCommit: candidate.upstreamCommit,
+      pluginSha256: candidate.pluginSha256 },
+    package: { ...packaged, output: undefined, candidate: undefined, installer: basename(packaged.installer) } }
+  writeJson(join(destination, 'signed-baseline.json'), manifest)
+  console.log(JSON.stringify({ preparedBaseline: destination, installer: manifest.package.installer,
+    installerSha256: packaged.assets.find(file => file.name === manifest.package.installer)?.sha256 }))
+  process.exit(0)
+}
+/** Verify a prebuilt signed baseline against this target before installing it. */
+function loadPrebuiltBaseline(dir) {
+  const manifest = json(join(dir, 'signed-baseline.json'))
+  assert.equal(manifest.schemaVersion, 1)
+  assert.equal(manifest.kind, 'signed-loopback-native-update-baseline')
+  assert.equal(manifest.testOnly, true); assert.equal(manifest.feed, signedBaselineFeed)
+  // Every input byte that decides the baseline: pinned baseline, target plugin and
+  // signing identity, and the same adapter patch and upstream commit as the target.
+  assert.deepEqual(manifest.input, baselineInputFor(target.input, true))
+  assert.deepEqual(manifest.candidate.input, manifest.input)
+  assert.equal(manifest.candidate.patchSha256, target.patchSha256)
+  assert.equal(manifest.candidate.upstreamCommit, target.upstreamCommit)
+  const receipt = manifest.package
+  assert.equal(receipt.testOnly, true); assert.equal(receipt.signed, true); assert.equal(receipt.feed, signedBaselineFeed)
+  assert.equal(receipt.productVersion, manifest.input.productVersion)
+  assert.deepEqual(receipt.plugin, manifest.input.plugin)
+  assert.equal(receipt.patchSha256, target.patchSha256)
+  assert.equal(basename(receipt.installer), receipt.installer)
+  for (const file of receipt.assets) {
+    assert.equal(basename(file.name), file.name)
+    const bytes = readFileSync(join(dir, file.name))
+    assert.equal(bytes.length, file.bytes, `${file.name} size differs from the baseline receipt`)
+    assert.equal(sha256(bytes), file.sha256, `${file.name} digest differs from the baseline receipt`)
+  }
+  assert.ok(receipt.assets.some(file => file.name === receipt.installer))
+  const policy = loadSigningPolicy()
+  assert.equal(target.input.signing.certificateSha256, policy.certificateSha256)
+  for (const path of [join(dir, receipt.installer)]) {
+    assert.equal(inspectWindowsSignature(path, policy).certificateSha256, policy.certificateSha256)
+  }
+  console.error(JSON.stringify({ installerAcceptance: 'prebuilt-baseline', phase: 'verified', installer: receipt.installer }))
+  return { candidate: { ...manifest.candidate, output: join(work, 'prebuilt-baseline') },
+    package: { ...receipt, output: dir, installer: join(dir, receipt.installer) } }
+}
+let baselineFile, baseline, prebuiltBaseline
+if (nativeUpdater && baselinePackageDir) {
+  prebuiltBaseline = loadPrebuiltBaseline(resolve(baselinePackageDir))
+  baseline = prebuiltBaseline.candidate
+  mkdirSync(baseline.output, { recursive: true })
+} else if (nativeUpdater) {
   // A product update normally ships another managed plugin: the baseline takes the
   // recorded preceding plugin, so the restart must activate a runtime prepared in
   // the background. Without a recorded plugin (or when it equals the target's) the
   // same run proves an identical runtime is retained. The legacy installer still
   // exercises a real old-plugin migration, including stale registry metadata.
-  const recorded = json(join(directory, 'installer-baseline.json'))
-  const baselineInput = { ...recorded, plugin: recorded.plugin ?? target.input.plugin,
-    ...(signedTarget ? { signing: target.input.signing } : {}) }
+  const baselineInput = baselineInputFor(target.input, Boolean(signedTarget))
   assert.equal(baselineInput.dshVersion, target.input.dshVersion)
   const baselineInputFile = join(work, signedTarget ? 'signed-baseline-input.json' : 'baseline-input.json')
   writeJson(baselineInputFile, baselineInput)
@@ -117,7 +200,7 @@ const server = createServer((req, res) => {
   } else if (req.method === 'HEAD') res.end()
   else { transfers.push({ name, bytes: file.bytes }); createReadStream(file.path).pipe(res) }
 })
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+await new Promise((resolve, reject) => { server.once('error', reject); server.listen(prebuiltBaseline ? SIGNED_BASELINE_FEED_PORT : 0, '127.0.0.1', resolve) })
 const feed = `http://127.0.0.1:${server.address().port}/`
 // The installer materializes the runtime in the Home it runs with; each install
 // names an isolated Home so no default location of the worker is touched early.
@@ -139,7 +222,8 @@ try {
   const packageInstaller = (candidate, feedArg, name) => node('package-installer.mjs', [candidate, feedArg + feed], name)
     .then(log => json(lastResult(log).installerReceipt))
   const [baselinePackage, targetPackage] = await Promise.all([
-    nativeUpdater ? packageInstaller(baselineFile, signedTarget ? '--signed-test-feed=' : '--test-feed=', 'package-baseline') : undefined,
+    prebuiltBaseline ? prebuiltBaseline.package
+      : nativeUpdater ? packageInstaller(baselineFile, signedTarget ? '--signed-test-feed=' : '--test-feed=', 'package-baseline') : undefined,
     signedReceiptFile ? json(signedReceiptFile) : packageInstaller(targetFile, '--test-feed=', 'package-target'),
   ])
   for (const receipt of [baselinePackage, targetPackage]) if (receipt) for (const file of receipt.assets) files.set(file.name, { path: join(receipt.output, file.name), bytes: file.bytes })
