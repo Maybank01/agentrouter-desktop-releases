@@ -8,8 +8,10 @@ import { root } from '../lib.mjs'
 test('the coordinated adapter export matches its single source owner byte for byte', () => {
   const dir = join(root, 'assembly/coordinated')
   const manifest = JSON.parse(readFileSync(join(dir, 'adapter-source.json'), 'utf8'))
-  assert.equal(manifest.repository, 'Maybank01/agentrouter-desktop')
-  assert.equal(manifest.sourceDirectory, 'assembly/coordinated')
+  // Unified client source since 2026-09-25 (agentrouter-desktop archived).
+  assert.equal(manifest.repository, 'Maybank01/agentrouter-dsh-plugins')
+  assert.equal(manifest.sourceDirectory, 'desktop/coordinated')
+  assert.equal(manifest.developmentOwner, 'Maybank01/agentrouter-dsh-plugins/desktop/coordinated')
   assert.match(manifest.commit, /^[a-f0-9]{40}$/)
   assert.deepEqual(readdirSync(dir).filter(name => name !== 'adapter-source.json' && name !== 'node_modules').sort(), manifest.files.map(file => file.path).sort())
   for (const entry of manifest.files) {

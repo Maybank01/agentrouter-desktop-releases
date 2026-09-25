@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "repository": "Maybank01/agentrouter-desktop",
-  "sourceDirectory": "assembly/coordinated",
-  "commit": "16470cfb01323d0419d25e468866818c9dabf18e",
-  "developmentOwner": "Maybank01/agentrouter-desktop/assembly/coordinated",
+  "repository": "Maybank01/agentrouter-dsh-plugins",
+  "sourceDirectory": "desktop/coordinated",
+  "commit": "c767a6571a2dd62fe5846a4f1ced7636f6acafb5",
+  "developmentOwner": "Maybank01/agentrouter-dsh-plugins/desktop/coordinated",
   "files": [
     {
       "path": "acceptance.mjs",
