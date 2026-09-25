@@ -1,6 +1,7 @@
 # Desktop 适配器 CI
 
-私有 `Maybank01/agentrouter-desktop` 是适配器源码仓库；本公共发行仓库的
+私有统一客户端仓库 `Maybank01/agentrouter-dsh-plugins` 的 `desktop/coordinated` 是适配器源码
+（2026-09-25 起；原 `agentrouter-desktop` 已归档）；本公共发行仓库的
 `.github/workflows/ci.yml` 独立运行 Desktop 适配器 CI。公共标准 Ubuntu/Windows
 运行器不使用私有仓库的 Actions 分钟额度。私有仓库调用公共 reusable workflow
 仍按私有调用方计费，因此不保留这种转发器。
@@ -8,11 +9,11 @@
 ## 从源码到验证
 
 1. 在私有源码仓库的隔离工作树运行 `npm test` 和 `git diff --check`。
-   原生实现变更还要按 `assembly/coordinated/README.md` 做相应本地验证。
+   原生实现变更还要运行 `npm run desktop:install` 与 `npm run desktop:test`。
 2. 代码审阅合并后，从干净的当前 main 运行：
 
    ```text
-   node assembly/coordinated/export-release-adapter.mjs <本公共发行仓库的隔离工作树>
+   npm run desktop:export -- <本公共发行仓库的隔离工作树>
    ```
 
    导出器只复制 allow-list 中的已提交 Git 字节，生成

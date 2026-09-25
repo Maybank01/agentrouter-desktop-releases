@@ -3,9 +3,10 @@
 This repository publishes the official DSH Desktop assembly. The plugin stays
 independently installable from npm. A product version binds one DSH version and
 one immutable, already published plugin tarball in `coordinated/release.json`.
-The native source owner is `Maybank01/agentrouter-desktop/assembly/coordinated`;
-commit there and export with its `export-release-adapter.mjs` before updating this
-repository. Do not edit the exported adapter here.
+The native source owner is `Maybank01/agentrouter-dsh-plugins/desktop/coordinated`
+(unified client project since 2026-09-25; `agentrouter-desktop` is archived);
+commit there and export with `npm run desktop:export -- <this checkout>` before
+updating this repository. Do not edit the exported adapter here.
 
 ## Accepted candidate
 

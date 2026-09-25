@@ -11,7 +11,7 @@ Desktop：一次产品更新同时安装经过验证的 DSH 与 AgentRouter 插�
 
 ## 协同发行
 
-原生发行适配层由 `Maybank01/agentrouter-desktop/assembly/coordinated` 维护。
+原生发行适配层由统一客户端仓库 `Maybank01/agentrouter-dsh-plugins/desktop/coordinated` 维护（2026-09-25 起；原 `agentrouter-desktop` 已归档）。
 本仓库的 `assembly/coordinated/adapter-source.json` 记录导出来源与逐文件摘要；
 构建只使用已发布的精确 npm tarball，不在发行仓库编译另一份插件。
 

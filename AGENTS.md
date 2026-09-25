@@ -12,7 +12,8 @@ Run `npm ci --ignore-scripts --prefix assembly/coordinated`, `npm test` and
 `git diff --check` for assembly/workflow configuration changes.
 
 2026-09-17 approved delivery extension: `assembly/coordinated` is an exact export
-from `Maybank01/agentrouter-desktop/assembly/coordinated`, recorded by
+from `Maybank01/agentrouter-dsh-plugins/desktop/coordinated` (the unified client
+project since 2026-09-25; `agentrouter-desktop` is archived), recorded by
 `adapter-source.json`. Develop native delivery changes there and re-export;
 this repository remains the sole binary publisher. The limited official Desktop
 adapter owns product identity, profile migration and coordinated updates. No
